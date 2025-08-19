@@ -1,5 +1,9 @@
 name: contentgen-agent
 
+# allow the workflow to commit back to the repo
+permissions:
+  contents: write
+
 on:
   workflow_dispatch:
     inputs:
@@ -13,9 +17,13 @@ jobs:
     runs-on: ubuntu-latest
     env:
       REGION: ${{ inputs.region }}
+
+      # Deploy secrets (conditional deploy if these are present)
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+      # App secrets
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       AFFILIATE_BASE_URL: ${{ secrets.AFFILIATE_BASE_URL }}
       AFFILIATE_TAG: ${{ secrets.AFFILIATE_TAG }}
@@ -35,7 +43,11 @@ jobs:
         run: |
           set -e
           if [ ! -f package.json ]; then
-            npx --yes create-next-app@latest . --ts --app --src-dir --eslint --use-npm
+            # repo isn't empty because this workflow + scripts exist
+            npx --yes create-next-app@latest app --ts --app --src-dir --eslint --use-npm
+            shopt -s dotglob nullglob
+            mv app/* .
+            rmdir app
           fi
 
       - name: Bootstrap content generator files
@@ -50,20 +62,4 @@ jobs:
       - name: Test
         run: npm run test --if-present
 
-      - name: Commit and push changes
-        run: |
-          git config user.name "contentgen-agent"
-          git config user.email "actions@users.noreply.github.com"
-          git add -A
-          git diff --cached --quiet || git commit -m "chore(agent): scaffold/update content generator"
-          git push || true
-
-      - name: Deploy to Vercel (Production)
-        run: |
-          npm i -g vercel@latest
-          vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
-          DEPLOY_URL=$(vercel deploy --prod --token="$VERCEL_TOKEN")
-          echo "DEPLOY_URL=$DEPLOY_URL" >> $GITHUB_ENV
-
-      - name: Show Deployment URL
-        run: echo "Deployed: $DEPLOY_URL"
+      - na
