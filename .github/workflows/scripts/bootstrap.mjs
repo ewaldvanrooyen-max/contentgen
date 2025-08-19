@@ -43,7 +43,6 @@ async function ensurePkg() {
 
 async function ensureTS() {
   if (!exists("tsconfig.json")) {
-    // Fall back to a sane default if Next didn’t create it for some reason
     writeJSON("tsconfig.json", {
       compilerOptions: {
         target: "ES2020",
@@ -113,7 +112,6 @@ Open /api/health → {"ok":true}
 }
 
 async function writeLibs() {
-  // lib/openai.ts
   writeTxt("lib/openai.ts", `
 import OpenAI from "openai";
 const key = process.env.OPENAI_API_KEY;
@@ -129,7 +127,6 @@ export async function generateScript(opts: {
   const user = \`Platform: \${platform}\\nTone: \${tone}\\nTopic: \${topic}\\nRules:\\n- Hook first line\\n- 90–120 words\\n- 1–2 line caption\\n- 15–25 hashtags (no repeats)\\n- End with CTA\`;
 
   if (!key) {
-    // Offline fallback so CI can pass without a key
     return {
       script: \`HOOK: \${topic} in 60s. 1) What it is. 2) Why it matters. 3) Quick tip. CTA: Follow for more.\`,
       caption: \`\${topic} breakdown. Save & share.\`,
@@ -154,7 +151,6 @@ export async function generateScript(opts: {
 }
 `.trimStart());
 
-  // lib/prompts.ts
   writeTxt("lib/prompts.ts", `
 export type Tone = "high-energy"|"educational"|"story";
 export type Platform = "tiktok"|"reels"|"shorts";
@@ -162,7 +158,6 @@ export const platformMarker = (p: Platform) =>
   p === "tiktok" ? "[TikTok]" : p === "reels" ? "[Reels]" : "[Shorts]";
 `.trimStart());
 
-  // lib/affiliate.ts
   writeTxt("lib/affiliate.ts", `
 type MapEntry = { keyword: string; path: string; };
 
@@ -195,7 +190,6 @@ function joinUrl(base: string, path: string, tag: string) {
 }
 `.trimStart());
 
-  // lib/trends.ts
   writeTxt("lib/trends.ts", `
 export type Trend = { keyword: string; score: number; source: string };
 
@@ -225,7 +219,6 @@ export async function fetchTrends(region="US", limit=10): Promise<Trend[]> {
 }
 `.trimStart());
 
-  // lib/rateLimit.ts
   writeTxt("lib/rateLimit.ts", `
 type Entry = { hits: number; resetAt: number };
 const buckets = new Map<string, Entry>();
@@ -250,13 +243,11 @@ export function logReq(route: string, ip: string, status: number, ms: number) {
 }
 
 async function writeAPIsAndUI() {
-  // Health
   writeTxt("app/api/health/route.ts",
 `import { NextResponse } from "next/server";
 export function GET(){ return NextResponse.json({ ok: true }); }
 `);
 
-  // Trends
   writeTxt("app/api/trends/route.ts", `
 import { NextRequest, NextResponse } from "next/server";
 import { fetchTrends } from "@/lib/trends";
@@ -286,7 +277,6 @@ export async function GET(req: NextRequest) {
 }
 `.trimStart());
 
-  // Generate
   writeTxt("app/api/generate/route.ts", `
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
@@ -339,7 +329,6 @@ export async function POST(req: NextRequest) {
 }
 `.trimStart());
 
-  // Minimal UI
   writeTxt("app/page.tsx", `
 "use client";
 import { useState } from "react";
