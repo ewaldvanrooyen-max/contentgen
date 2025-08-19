@@ -1,1 +1,109 @@
+name: contentgen-agent
+
+permissions:
+  contents: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: Default trends region
+        required: false
+        default: US
+
+jobs:
+  build_and_deploy:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      CI: "true"
+      NEXT_TELEMETRY_DISABLED: "1"
+      REGION: ${{ inputs.region }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      AFFILIATE_BASE_URL: ${{ secrets.AFFILIATE_BASE_URL }}
+      AFFILIATE_TAG: ${{ secrets.AFFILIATE_TAG }}
+      YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Show tree
+        run: |
+          pwd
+          ls -la || true
+
+      - name: Scaffold Next.js if missing
+        run: |
+          set -euo pipefail
+          if [ ! -f package.json ]; then
+            npx --yes create-next-app@latest app --ts --app --src-dir --eslint --use-npm
+            shopt -s dotglob nullglob
+            mv app/* .
+            rmdir app
+          fi
+
+      - name: Verify scaffold
+        run: |
+          ls -la
+          node -e "try{console.log(require('./package.json').name||'no-name')}catch(e){console.log('no-package')}" || true
+
+      - name: Bootstrap content generator files
+        run: node scripts/bootstrap.mjs
+
+      - name: Install deps
+        run: npm ci || npm i
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm run test --if-present
+
+      - name: Git config
+        shell: bash
+        run: |
+          git config user.name "contentgen-agent"
+          git config user.email "actions@users.noreply.github.com"
+
+      - name: Commit changes (if any)
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(agent): scaffold/update content generator"
+            git push || true
+          else
+            echo "No changes to commit."
+          fi
+
+      - name: Deploy to Vercel (Production)
+        if: ${{ env.VERCEL_TOKEN && env.VERCEL_ORG_ID && env.VERCEL_PROJECT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm i -g vercel@latest
+          vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+          DEPLOY_URL=$(vercel deploy --prod --token="$VERCEL_TOKEN")
+          echo "DEPLOY_URL=$DEPLOY_URL" >> "$GITHUB_ENV"
+
+      - name: Show Deployment URL
+        if: ${{ env.DEPLOY_URL }}
+        shell: bash
+        run: |
+          echo "Deployed: $DEPLOY_URL"
 
