@@ -18,15 +18,32 @@ on:
         required: false
         default: true
         type: boolean
+      dry_run:
+        description: Don't apply (no commit/push), just run tasks
+        required: false
+        default: false
+        type: boolean
+      extra_tasks:
+        description: Comma-separated extra tasks (e.g. "diagnose,yaml-check")
+        required: false
+        default: ""
+        type: string
   push:
+  schedule:
+    # daily heartbeat at 07:17 UTC, change if you like
+    - cron: "17 7 * * *"
 
 permissions:
   contents: write
 
+# Prevent overlapping runs on the same branch
+concurrency:
+  group: contentgen-agent-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   agent:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -45,7 +62,7 @@ jobs:
 
       - name: Run agent
         env:
-          # Optional tokens if you later want deploy steps:
+          # Optional deployment secrets (unused unless you wire deploy steps later)
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
@@ -55,9 +72,11 @@ jobs:
           AGENT_BRANCH: ${{ github.ref_name }}
           AGENT_TEST_FILE: .agent_heartbeat
 
-          # Inputs
-          NO_CHECK: ${{ github.event_name == 'workflow_dispatch' && inputs.no_check || false }}
-          FIX_TABS: ${{ github.event_name == 'workflow_dispatch' && inputs.fix_tabs || true }}
+          # Inputs (booleans are typed in the dispatcher)
+          NO_CHECK:   ${{ github.event_name == 'workflow_dispatch' && inputs.no_check || false }}
+          FIX_TABS:   ${{ github.event_name == 'workflow_dispatch' && inputs.fix_tabs || true }}
+          DRY_RUN:    ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+          EXTRA_TASKS:${{ github.event_name == 'workflow_dispatch' && inputs.extra_tasks || '' }}
           COMMIT_MSG: ${{ github.event_name == 'workflow_dispatch' && inputs.commit_msg || 'chore(agent): auto-run' }}
         shell: bash
         run: |
@@ -66,18 +85,37 @@ jobs:
           git config user.name  "contentgen-agent"
           git config user.email "actions@users.noreply.github.com"
 
-          # Make sure we’re on the same branch the workflow is running on
+          # make sure we're on the same branch the workflow is on
           git checkout "${AGENT_BRANCH}" || true
 
-          FLAGS=( --apply
-                  --task write-test-change
-                  --task yaml-check
-                  --task commit-push
-                  --commit "${COMMIT_MSG}" )
+          FLAGS=()
 
-          # pass optional flags based on inputs
+          # Only include --apply when not in dry-run mode
+          if [[ "${DRY_RUN}" != "true" ]]; then
+            FLAGS+=( --apply )
+          fi
+
+          # Core tasks
+          FLAGS+=( --task write-test-change )
+          FLAGS+=( --task yaml-check )
+          FLAGS+=( --task commit-push )
+          FLAGS+=( --commit "${COMMIT_MSG}" )
+
+          # Optional flags
           if [[ "${NO_CHECK}" == "true" ]]; then FLAGS+=( --no-check ); fi
           if [[ "${FIX_TABS}" == "true" ]]; then FLAGS+=( --fix ); fi
+
+          # Extra tasks passed as comma-separated list
+          if [[ -n "${EXTRA_TASKS}" ]]; then
+            IFS=',' read -ra T <<< "${EXTRA_TASKS}"
+            for t in "${T[@]}"; do
+              t_trimmed="$(echo "$t" | xargs)"
+              [[ -n "${t_trimmed}" ]] && FLAGS+=( --task "${t_trimmed}" )
+            done
+          fi
+
+          echo "Running agent with flags:"
+          printf '  %q\n' "${FLAGS[@]}"
 
           node scripts/agent.mjs "${FLAGS[@]}"
 
