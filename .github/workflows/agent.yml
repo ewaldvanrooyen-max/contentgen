@@ -1,39 +1,20 @@
 name: contentgen-agent
 
 on:
-permissions:
-  contents: write
-
+  push:
+    branches: [ main ]     # change if you want
   workflow_dispatch:
     inputs:
-      apply:
-        description: "Apply changes (commit/push). If false, dry-run only."
-        type: boolean
-        default: true
-      commit:
-        description: "Commit message"
-        type: string
-        default: "chore(agent): automated push"
-      branch:
-        description: "Branch to operate on (blank = current)"
-        type: string
-        default: ""
-      force:
-        description: "Use --force-with-lease if needed"
-        type: boolean
-        default: false
-      no_check:
-        description: "Skip YAML sanity checks"
-        type: boolean
-        default: false
-      fix_tabs:
-        description: "Convert tabs→spaces in YAML before checking"
-        type: boolean
-        default: true
-      create_test_change:
-        description: "Create AGENT_TEST.txt with a timestamp so the agent has something to commit"
-        type: boolean
-        default: true
+      apply:   { type: boolean, default: true }
+      commit:  { type: string,  default: "chore(agent): automated push" }
+      branch:  { type: string,  default: "" }
+      force:   { type: boolean, default: false }
+      no_check:{ type: boolean, default: false }
+      fix_tabs:{ type: boolean, default: true }
+      create_test_change: { type: boolean, default: true }
+
+permissions:
+  contents: write
 
 concurrency:
   group: agent-${{ github.ref }}
@@ -42,17 +23,26 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
+
+    # Resolve values: if manual run, use inputs; else use repo variables; else fallback defaults.
+    env:
+      APPLY:        ${{ github.event_name == 'workflow_dispatch' && inputs.apply   || vars.AGENT_APPLY   || 'true' }}
+      COMMIT_MSG:   ${{ github.event_name == 'workflow_dispatch' && inputs.commit  || vars.AGENT_COMMIT  || 'chore(agent): automated push' }}
+      BRANCH:       ${{ github.event_name == 'workflow_dispatch' && inputs.branch  || vars.AGENT_BRANCH  || '' }}
+      FORCE:        ${{ github.event_name == 'workflow_dispatch' && inputs.force   || vars.AGENT_FORCE   || 'false' }}
+      NO_CHECK:     ${{ github.event_name == 'workflow_dispatch' && inputs.no_check|| vars.AGENT_NO_CHECK|| 'false' }}
+      FIX_TABS:     ${{ github.event_name == 'workflow_dispatch' && inputs.fix_tabs|| vars.AGENT_FIX_TABS|| 'true' }}
+      CREATE_TEST:  ${{ github.event_name == 'workflow_dispatch' && inputs.create_test_change || vars.AGENT_CREATE_TEST_CHANGE || 'false' }}
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: "npm"
+          cache: npm
 
       - name: Install agent deps
         run: |
@@ -60,9 +50,8 @@ jobs:
           npm i -D yaml fast-glob
 
       - name: Create test change (optional)
-        if: ${{ inputs.create_test_change }}
-        run: |
-          echo "agent ping $(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> AGENT_TEST.txt
+        if: ${{ env.CREATE_TEST == 'true' }}
+        run: echo "agent ping $(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> AGENT_TEST.txt
 
       - name: Run agent
         shell: bash
@@ -74,12 +63,12 @@ jobs:
         run: |
           set -euo pipefail
           ARGS=()
-          [[ "${{ inputs.apply }}" == "true" ]] && ARGS+=(--apply)
-          [[ "${{ inputs.force }}" == "true" ]] && ARGS+=(--force)
-          [[ "${{ inputs.no_check }}" == "true" ]] && ARGS+=(--no-check)
-          [[ "${{ inputs.fix_tabs }}" == "true" ]] && ARGS+=(--fix)
-          [[ -n "${{ inputs.branch }}" ]] && ARGS+=(--branch "${{ inputs.branch }}")
-          [[ -n "${{ inputs.commit }}" ]] && ARGS+=(--commit "${{ inputs.commit }}")
+          [ "${APPLY}" = "true" ]    && ARGS+=(--apply)
+          [ "${FORCE}" = "true" ]    && ARGS+=(--force)
+          [ "${NO_CHECK}" = "true" ] && ARGS+=(--no-check)
+          [ "${FIX_TABS}" = "true" ] && ARGS+=(--fix)
+          [ -n "${BRANCH}" ]         && ARGS+=(--branch "${BRANCH}")
+          ARGS+=(--commit "${COMMIT_MSG}")
           node scripts/agent.mjs "${ARGS[@]}" --push
 
       - name: Show last commits
