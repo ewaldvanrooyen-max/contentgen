@@ -1,6 +1,9 @@
 name: contentgen-agent
 
 on:
+permissions:
+  contents: write
+
   workflow_dispatch:
     inputs:
       apply:
