@@ -18,7 +18,7 @@ jobs:
       CI: "true"
       NEXT_TELEMETRY_DISABLED: "1"
       REGION: ${{ inputs.region }}
-      # Deploy secrets (conditional)
+      # Deploy secrets (conditional deploy)
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
@@ -44,6 +44,7 @@ jobs:
           ls -la || true
 
       - name: Ensure project scaffold (safe for non-empty repo)
+        shell: bash
         run: |
           set -euo pipefail
           if [ ! -f package.json ]; then
@@ -95,4 +96,5 @@ jobs:
 
       - name: Show Deployment URL
         if: ${{ env.VERCEL_TOKEN != '' && env.VERCEL_ORG_ID != '' && env.VERCEL_PROJECT_ID != '' }}
-        run: echo "Deployed: $DEPLOY_URL"
+        run: |
+          echo "Deployed: $DEPLOY_URL"
