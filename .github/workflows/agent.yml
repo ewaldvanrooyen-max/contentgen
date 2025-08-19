@@ -39,7 +39,9 @@ jobs:
           cache: "npm"
 
       - name: Debug - initial tree
-        run: pwd && ls -la || true
+        run: |
+          pwd
+          ls -la || true
 
       - name: Ensure project scaffold (safe for non-empty repo)
         shell: bash
@@ -56,7 +58,9 @@ jobs:
           fi
 
       - name: Debug - post-scaffold tree
-        run: ls -la && node -e "try{console.log(require('./package.json').name||'no-name')}catch(e){console.log('no-package')}"
+        run: |
+          ls -la
+          node -e "try{console.log(require('./package.json').name||'no-name')}catch(e){console.log('no-package')}" || true
 
       - name: Bootstrap content generator files
         run: node scripts/bootstrap.mjs
@@ -71,6 +75,7 @@ jobs:
         run: npm run test --if-present
 
       - name: Commit and push changes
+        shell: bash
         run: |
           git config user.name "contentgen-agent"
           git config user.email "actions@users.noreply.github.com"
@@ -83,13 +88,15 @@ jobs:
           fi
 
       - name: Deploy to Vercel (Production)
-        if: ${{ env.VERCEL_TOKEN && env.VERCEL_ORG_ID && env.VERCEL_PROJECT_ID }}
+        if: ${{ env.VERCEL_TOKEN != '' && env.VERCEL_ORG_ID != '' && env.VERCEL_PROJECT_ID != '' }}
+        shell: bash
         run: |
           npm i -g vercel@latest
           vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
           DEPLOY_URL=$(vercel deploy --prod --token="$VERCEL_TOKEN")
-          echo "DEPLOY_URL=$DEPLOY_URL" >> $GITHUB_ENV
+          echo "DEPLOY_URL=$DEPLOY_URL" >> "$GITHUB_ENV"
 
       - name: Show Deployment URL
-        if: ${{ env.DEPLOY_URL }}
-        run: echo "Deployed: $DEPLOY_URL"
+        if: ${{ env.DEPLOY_URL != '' }}
+        run: |
+          echo "Deployed: $DEPLOY_URL"
