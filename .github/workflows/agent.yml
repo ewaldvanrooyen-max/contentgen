@@ -1,0 +1,69 @@
+name: contentgen-agent
+
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: "Default trends region"
+        required: false
+        default: "US"
+
+jobs:
+  build_and_deploy:
+    runs-on: ubuntu-latest
+    env:
+      REGION: ${{ inputs.region }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      AFFILIATE_BASE_URL: ${{ secrets.AFFILIATE_BASE_URL }}
+      AFFILIATE_TAG: ${{ secrets.AFFILIATE_TAG }}
+      YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Ensure project scaffold (Next.js)
+        run: |
+          set -e
+          if [ ! -f package.json ]; then
+            npx --yes create-next-app@latest . --ts --app --src-dir --eslint --use-npm
+          fi
+
+      - name: Bootstrap content generator files
+        run: node scripts/bootstrap.mjs
+
+      - name: Install deps
+        run: npm ci || npm i
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm run test --if-present
+
+      - name: Commit and push changes
+        run: |
+          git config user.name "contentgen-agent"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet || git commit -m "chore(agent): scaffold/update content generator"
+          git push || true
+
+      - name: Deploy to Vercel (Production)
+        run: |
+          npm i -g vercel@latest
+          vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+          DEPLOY_URL=$(vercel deploy --prod --token="$VERCEL_TOKEN")
+          echo "DEPLOY_URL=$DEPLOY_URL" >> $GITHUB_ENV
+
+      - name: Show Deployment URL
+        run: echo "Deployed: $DEPLOY_URL"
