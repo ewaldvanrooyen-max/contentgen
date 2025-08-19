@@ -1,0 +1,9 @@
+{
+  "devDependencies": {
+    "fast-glob": "^3.3.3",
+    "yaml": "^2.8.1"
+  },
+  "dependencies": {
+    "openai": "^5.12.2"
+  }
+}
