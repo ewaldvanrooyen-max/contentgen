@@ -45,7 +45,14 @@ jobs:
         run: pwd && ls -la || true
 
       - name: Scaffold Next.js if missing
-        run: if [ ! -f package.json ]; then npx --yes create-next-app@latest app --ts --app --src-dir --eslint --use-npm && shopt -s dotglob nullglob && mv app/* . && rmdir app; fi
+        run: |
+          set -euo pipefail
+          if [ ! -f package.json ]; then
+            npx --yes create-next-app@latest app --ts --app --src-dir --eslint --use-npm
+            shopt -s dotglob nullglob
+            mv app/* .
+            rmdir app
+          fi
 
       - name: Verify scaffold
         run: ls -la && node -e "try{console.log(require('./package.json').name)}catch{console.log('no-package')}" || true
@@ -62,7 +69,7 @@ jobs:
       - name: Test
         run: npm run test --if-present
 
-            - name: Git config
+      - name: Git config
         shell: bash
         run: |
           git config user.name "contentgen-agent"
