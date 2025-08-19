@@ -1,0 +1,18 @@
+name: sanity
+on: [push, pull_request]
+
+jobs:
+  conflict-markers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fail if git conflict markers exist
+        shell: bash
+        run: |
+          if git grep -n '^[<=>]\{7\}' -- . ; then
+            echo "Conflict markers found. Fix them before merging."
+            exit 1
+          else
+            echo "No conflict markers found."
+          fi
