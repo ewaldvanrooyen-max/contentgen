@@ -16,6 +16,8 @@ jobs:
   build_and_deploy:
     runs-on: ubuntu-latest
     env:
+      CI: "true"
+      NEXT_TELEMETRY_DISABLED: "1"
       REGION: ${{ inputs.region }}
 
       # Deploy secrets (conditional deploy if these are present)
@@ -39,16 +41,29 @@ jobs:
           node-version: "20"
           cache: "npm"
 
-      - name: Ensure project scaffold (Next.js)
+      - name: Debug: initial tree
         run: |
-          set -e
+          pwd
+          ls -la || true
+
+      - name: Ensure project scaffold (Next.js, safe for non-empty repo)
+        shell: bash
+        run: |
+          set -euo pipefail
           if [ ! -f package.json ]; then
-            # repo isn't empty because this workflow + scripts exist
+            echo "Scaffolding Next.js into ./app then moving to repo root..."
             npx --yes create-next-app@latest app --ts --app --src-dir --eslint --use-npm
             shopt -s dotglob nullglob
             mv app/* .
             rmdir app
+          else
+            echo "package.json exists; skipping scaffold."
           fi
+
+      - name: Debug: post-scaffold tree
+        run: |
+          ls -la
+          test -f package.json && node -e "console.log(require('./package.json').name || 'no-name')"
 
       - name: Bootstrap content generator files
         run: node scripts/bootstrap.mjs
@@ -67,8 +82,12 @@ jobs:
           git config user.name "contentgen-agent"
           git config user.email "actions@users.noreply.github.com"
           git add -A
-          git diff --cached --quiet || git commit -m "chore(agent): scaffold/update content generator"
-          git push || true
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "chore(agent): scaffold/update content generator"
+            git push || true
+          fi
 
       - name: Deploy to Vercel (Production)
         if: ${{ env.VERCEL_TOKEN != '' && env.VERCEL_ORG_ID != '' && env.VERCEL_PROJECT_ID != '' }}
