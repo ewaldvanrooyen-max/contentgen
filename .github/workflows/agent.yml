@@ -92,7 +92,7 @@ jobs:
           fi
 
       - name: Deploy to Vercel (Production)
-        if: ${{ env.VERCEL_TOKEN && env.VERCEL_ORG_ID && env.VERCEL_PROJECT_ID }}
+        if: ${{ env.VERCEL_TOKEN != '' && env.VERCEL_ORG_ID != '' && env.VERCEL_PROJECT_ID != '' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -102,8 +102,7 @@ jobs:
           echo "DEPLOY_URL=$DEPLOY_URL" >> "$GITHUB_ENV"
 
       - name: Show Deployment URL
-        if: ${{ env.DEPLOY_URL }}
+        if: ${{ env.DEPLOY_URL != '' }}
         shell: bash
         run: |
           echo "Deployed: $DEPLOY_URL"
-
