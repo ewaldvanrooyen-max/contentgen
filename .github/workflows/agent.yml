@@ -27,6 +27,10 @@ on:
         description: "Convert tabs→spaces in YAML before checking"
         type: boolean
         default: true
+      create_test_change:
+        description: "Create AGENT_TEST.txt with a timestamp so the agent has something to commit"
+        type: boolean
+        default: true
 
 concurrency:
   group: agent-${{ github.ref }}
@@ -39,7 +43,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # we need history for rebase
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -51,6 +55,11 @@ jobs:
         run: |
           npm init -y >/dev/null 2>&1 || true
           npm i -D yaml fast-glob
+
+      - name: Create test change (optional)
+        if: ${{ inputs.create_test_change }}
+        run: |
+          echo "agent ping $(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> AGENT_TEST.txt
 
       - name: Run agent
         shell: bash
