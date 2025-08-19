@@ -1,232 +1,279 @@
 #!/usr/bin/env node
-// Agent v2: modular tasks, YAML cop, auto-rebase push, diagnostics, run report.
-import { execSync } from "node:child_process";
+/**
+ * scripts/agent.mjs
+ *
+ * A tiny repo helper that can:
+ *  - run diagnostics
+ *  - lint/parse YAML workflows
+ *  - make a trivial test change
+ *  - commit & push (with non-fast-forward handling)
+ *  - NEW: --task scaffold-mvp (delegates to scripts/scaffold-mvp.mjs)
+ *
+ * Flags (order doesn’t matter):
+ *   --task <name>           diagnose | yaml-check | write-test-change | commit-push | scaffold-mvp
+ *   --apply                 actually commit/push (otherwise dry-run)
+ *   --commit "<message>"    commit message for commit-push
+ *   --remote <name>         git remote (default: origin)
+ *   --branch <name>         branch to push (default: main)
+ *   --no-check              skip yaml-check
+ *   --fix-tabs              replace hard tabs in YAML with spaces before parsing
+ *
+ * Examples:
+ *   node scripts/agent.mjs --task diagnose --task yaml-check
+ *   node scripts/agent.mjs --apply --task write-test-change --task yaml-check --task commit-push --commit "chore(agent): test push"
+ *   node scripts/agent.mjs --task scaffold-mvp
+ */
+
 import fs from "node:fs";
 import path from "node:path";
+import { execSync } from "node:child_process";
 import fg from "fast-glob";
 import * as YAML from "yaml";
 
-/* ---------------------------- arg parsing ---------------------------- */
+const ROOT = path.resolve(process.cwd());
+
+// ------------------------------- utils ---------------------------------
+
+function sh(cmd, opts = {}) {
+  const out = execSync(cmd, {
+    stdio: ["ignore", "pipe", "pipe"],
+    encoding: "utf8",
+    ...opts
+  });
+  return out.trim();
+}
+function safe(cmd, opts = {}) {
+  try {
+    return sh(cmd, opts);
+  } catch (err) {
+    throw new Error(`Command failed: ${cmd}\n${err?.stdout || ""}${err?.stderr || ""}`.trim());
+  }
+}
+function read(file) {
+  return fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
+}
+function write(file, text) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, text, "utf8");
+}
+function nowISO() {
+  return new Date().toISOString().replace("T", " ").replace("Z", " UTC");
+}
+
+// ----------------------------- arg parsing ------------------------------
+
 const argv = process.argv.slice(2);
-const flags = new Set(argv);
-const get = (k, d = "") => {
-  const i = argv.indexOf(k);
-  return i >= 0 && argv[i + 1] ? argv[i + 1] : d;
+const argSet = new Set(argv);
+const getArg = (flag, fallback = "") => {
+  const i = argv.indexOf(flag);
+  return i >= 0 ? (argv[i + 1] || fallback) : fallback;
 };
 
-const APPLY  = flags.has("--apply");
-const FORCE  = flags.has("--force");                  // uses --force-with-lease
-const NOCHK  = flags.has("--no-check");
-const FIXTAB = flags.has("--fix");
-const PUSH   = flags.has("--push") || APPLY;
+const APPLY = argSet.has("--apply");
+const NO_CHECK = argSet.has("--no-check");
+const FIX_TABS = argSet.has("--fix-tabs");
+const COMMIT_MSG = getArg("--commit", "chore(agent): automated change");
+const REMOTE = getArg("--remote", process.env.AGENT_REMOTE || "origin");
+const BRANCH = getArg("--branch", process.env.AGENT_BRANCH || "main");
 
-const COMMIT = get("--commit", "chore(agent): automated push");
-const REMOTE = get("--remote", process.env.AGENT_REMOTE || "origin");
-let   BRANCH = get("--branch", process.env.AGENT_BRANCH || "");
-
-const tasksFromArgs = argv.flatMap((a, i) => (a === "--task" ? [argv[i + 1]] : [])).filter(Boolean);
-
-/* ------------------------------ utils ------------------------------- */
-function sh(cmd) {
-  return execSync(cmd, { stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" }).trim();
+// allow multiple --task occurrences
+const TASKS = [];
+for (let i = 0; i < argv.length; i++) {
+  if (argv[i] === "--task" && argv[i + 1]) TASKS.push(argv[i + 1]);
 }
-function say(cmd) { console.log("›", cmd); return sh(cmd); }
-function now() { return new Date().toISOString().replace(/[:.]/g, "-"); }
 
-function ensureGit() {
-  try { sh("git rev-parse --is-inside-work-tree"); }
-  catch {
-    console.error("Not a git repo. Run `git init && git remote add origin <url>`.");
-    process.exit(1);
+// ------------------------ NEW: scaffold dispatcher ----------------------
+
+async function maybeScaffoldMvp() {
+  // if explicitly asked for this single task, run it and exit early
+  if (TASKS.length === 1 && TASKS[0] === "scaffold-mvp") {
+    const mod = await import("./scaffold-mvp.mjs");
+    await mod.run();
+    return true;
   }
+  return false;
 }
-function currBranch() {
+
+// ------------------------------- tasks ----------------------------------
+
+async function diagnose() {
+  const node = process.version;
+  let lastCommits = "";
   try {
-    const b = sh("git rev-parse --abbrev-ref HEAD");
-    return b === "HEAD" ? "" : b;
-  } catch { return ""; }
-}
-function hasChanges() {
-  try { sh("git update-index -q --refresh"); } catch {}
-  return sh("git status --porcelain").length > 0;
+    lastCommits = safe(`git --no-pager log --oneline -n 3`);
+  } catch {}
+  const report = { node, lastCommits };
+  console.log(JSON.stringify(report, null, 2));
 }
 
-/* ------------------------- YAML helpers/checks ---------------------- */
-const reportDir = "agent_reports";
-fs.mkdirSync(reportDir, { recursive: true });
-
-const isWorkflow = p => p.replace(/\\/g, "/").startsWith(".github/workflows/");
-async function listYaml() { return fg(["**/*.yml", "**/*.yaml", "!node_modules/**", "!.git/**"], { dot: true }); }
-const fixTabs = s => s.replace(/\t/g, "  ");
-
-function validateWorkflow(doc) {
-  const errs = [];
-  const root = doc.toJS({ maxAliasCount: 100 });
-  const t = v => Object.prototype.toString.call(v).slice(8, -1);
-
-  if (!root || t(root) !== "Object") { errs.push("Top-level YAML must be an object."); return errs; }
-  if (!("on" in root))   errs.push('Missing top-level "on".');
-  if (!("jobs" in root)) errs.push('Missing top-level "jobs".');
-
-  const jobs = root.jobs;
-  if (jobs && t(jobs) === "Object") {
-    for (const [name, job] of Object.entries(jobs)) {
-      if (t(job) !== "Object") { errs.push(`jobs.${name} must be an object.`); continue; }
-      if (!("runs-on" in job)) errs.push(`jobs.${name} missing "runs-on".`);
-      if (!("steps" in job))   errs.push(`jobs.${name} missing "steps".`);
-      const steps = job.steps;
-      if (Array.isArray(steps)) {
-        steps.forEach((st, i) => {
-          if (t(st) !== "Object") errs.push(`jobs.${name}.steps[${i}] must be an object.`);
-          else if (!("run" in st) && !("uses" in st))
-            errs.push(`jobs.${name}.steps[${i}] needs "run" or "uses".`);
-        });
-      }
-    }
+function scanConflictMarkers(text, file) {
+  if (text.includes("<<<<<<<") || text.includes("=======") || text.includes(">>>>>>>")) {
+    throw new Error(`Conflict markers found in ${file}`);
   }
-  return errs;
 }
 
-async function checkYaml({ fixTabsFirst = false } = {}) {
-  const files = await listYaml();
-  const problems = [];
-  for (const file of files) {
-    let src = fs.readFileSync(file, "utf8");
-    if (fixTabsFirst && /\t/.test(src)) {
-      src = fixTabs(src);
-      fs.writeFileSync(file, src, "utf8");
-      console.log(`fixed tabs → spaces: ${file}`);
-    }
-    const doc = YAML.parseDocument(src, { prettyErrors: true });
-    if (doc.errors?.length) {
-      for (const e of doc.errors) {
-        problems.push({
-          file,
-          msg: e.message,
-          line: e.linePos?.[0]?.line,
-          col: e.linePos?.[0]?.col
-        });
-      }
-    } else if (isWorkflow(file)) {
-      for (const msg of validateWorkflow(doc)) problems.push({ file, msg });
-    }
+async function yamlCheck() {
+  if (NO_CHECK) {
+    console.log("yaml-check: skipped via --no-check");
+    return;
   }
-  return { ok: problems.length === 0, problems, count: files.length };
-}
 
-/* -------------------------- git commit/push ------------------------- */
-function pushWithRetry() {
-  if (!BRANCH) BRANCH = currBranch() || "main";
-  try {
-    // If no upstream, first push sets upstream and exits.
-    try { sh(`git rev-parse --abbrev-ref --symbolic-full-name ${BRANCH}@{u}`); }
-    catch { say(`git push -u ${REMOTE} ${BRANCH}`); console.log("✓ Push complete."); return; }
+  const patterns = [".github/workflows/**/*.yml", ".github/workflows/**/*.yaml"];
+  const files = await fg(patterns, { cwd: ROOT, dot: true });
 
-    const cmd = FORCE
-      ? `git push --force-with-lease ${REMOTE} ${BRANCH}`
-      : `git push ${REMOTE} ${BRANCH}`;
-    say(cmd);
-  } catch {
-    console.log("Push rejected (non-fast-forward). Rebasing onto remote and retrying...");
+  for (const rel of files) {
+    const abs = path.join(ROOT, rel);
+    let text = read(abs);
+
+    if (FIX_TABS && /\t/.test(text)) {
+      text = text.replace(/\t/g, "  ");
+      write(abs, text); // keep the fix
+      console.log(`yaml-check: replaced tabs -> spaces in ${rel}`);
+    }
+
+    scanConflictMarkers(text, rel);
+
     try {
-      say(`git fetch ${REMOTE} ${BRANCH}`);
-      say(`git pull --rebase ${REMOTE} ${BRANCH}`);
-      const retry = FORCE
-        ? `git push --force-with-lease ${REMOTE} ${BRANCH}`
-        : `git push ${REMOTE} ${BRANCH}`;
-      say(retry);
-    } catch {
-      console.error("Push still failed after rebase. Fix conflicts, then:");
-      console.error("  git status");
-      console.error("  # edit files, git add -A, git rebase --continue");
-      process.exit(2);
-    }
-  }
-  console.log("✓ Push complete.");
-}
-
-function commitAndMaybePush(message) {
-  say("git add -A");
-  if (hasChanges()) {
-    say(`git commit -m "${message.replace(/"/g, '\\"')}"`);
-  } else {
-    console.log("No changes to commit.");
-  }
-  if (PUSH) pushWithRetry();
-}
-
-function writeReport(obj) {
-  const json = JSON.stringify(obj, null, 2);
-  fs.writeFileSync(path.join(reportDir, "latest.json"), json);
-  fs.writeFileSync(path.join(reportDir, `report-${now()}.json`), json);
-}
-
-/* --------------------------- task registry -------------------------- */
-const tasks = {
-  diagnose: async () => {
-    const info = {};
-    try { info.branch = currBranch() || "(detached)"; } catch {}
-    try { info.remote = sh("git remote -v").split("\n").slice(0, 2); } catch {}
-    try { info.node = process.version; } catch {}
-    try { info.lastCommits = sh("git --no-pager log --oneline -n 3"); } catch {}
-    console.log("diagnose:", JSON.stringify(info, null, 2));
-    return { ok: true, info };
-  },
-
-  yaml-check: async () => {
-    if (NOCHK) return { ok: true, skipped: true };
-    const res = await checkYaml({ fixTabsFirst: FIXTAB });
-    if (!res.ok) {
-      console.error("\nYAML check failed:");
-      for (const p of res.problems) {
-        const where = p.line ? `:${p.line}${p.col ? ":" + p.col : ""}` : "";
-        console.error(`  - ${p.file}${where}  ${p.msg}`);
-      }
-    }
-    return { ok: res.ok, count: res.count, problems: res.problems };
-  },
-
-  // UPDATED: writes to .agent_heartbeat by default,
-  // or override with --test-file <path> or AGENT_TEST_FILE env.
-  "write-test-change": async () => {
-    const file = get("--test-file", process.env.AGENT_TEST_FILE || ".agent_heartbeat");
-    const line = `agent ping ${new Date().toISOString()}\n`;
-    fs.appendFileSync(file, line);
-    return { ok: true, file, appended: line.trim() };
-  },
-
-  "commit-push": async () => {
-    commitAndMaybePush(COMMIT);
-    return { ok: true };
-  }
-};
-
-// Default pipeline when no explicit tasks provided.
-const defaultTasks = ["diagnose", "yaml-check", "commit-push"];
-
-/* ------------------------------- main -------------------------------- */
-(async function main() {
-  ensureGit();
-  const started = new Date().toISOString();
-  const plan = tasksFromArgs.length ? tasksFromArgs : defaultTasks;
-  const results = [];
-  let ok = true;
-
-  for (const name of plan) {
-    const fn = tasks[name];
-    if (!fn) { results.push({ ok: false, task: name, error: "unknown task" }); ok = false; break; }
-    try {
-      const r = await fn();
-      results.push({ task: name, ...r });
-      if (!r.ok) { ok = false; break; }
+      YAML.parse(text);
     } catch (e) {
-      results.push({ task: name, ok: false, error: String(e?.message || e) });
-      ok = false; break;
+      // surface parser errors with file context
+      throw new Error(`YAML parse failed for ${rel}:\n${String(e.message || e)}`);
     }
   }
 
-  const summary = { ok, started_at: started, finished_at: new Date().toISOString(), plan, results };
-  writeReport(summary);
-  console.log("Agent report:", path.join(reportDir, "latest.json"));
-  if (!ok) process.exit(2);
-})();
+  console.log(`yaml-check: OK (${files.length} file${files.length === 1 ? "" : "s"})`);
+}
+
+async function writeTestChange() {
+  const file = path.join(ROOT, "AGENT_TEST.txt");
+  const line = `agent ping ${nowISO()}\n`;
+  const before = read(file);
+  write(file, before + line);
+  console.log(`write-test-change: appended to ${path.relative(ROOT, file)}`);
+}
+
+function hasStagedChanges() {
+  try {
+    sh("git diff --cached --quiet");
+    return false; // quiet exit means no staged changes
+  } catch {
+    return true;
+  }
+}
+
+function hasAnyChanges() {
+  try {
+    sh("git diff --quiet");
+    sh("git diff --cached --quiet");
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+async function commitAndPush() {
+  console.log(`commit-push: remote=${REMOTE} branch=${BRANCH}`);
+
+  // add everything
+  safe("git add -A");
+
+  if (!hasStagedChanges() && !hasAnyChanges()) {
+    console.log("commit-push: no changes to commit.");
+    return;
+  }
+
+  if (!APPLY) {
+    console.log("commit-push: dry-run (use --apply to commit & push).");
+    return;
+  }
+
+  // commit
+  try {
+    safe(`git commit -m "${COMMIT_MSG.replace(/"/g, '\\"')}"`);
+  } catch (e) {
+    // nothing to commit is fine
+    if (!/nothing to commit/i.test(String(e))) throw e;
+  }
+
+  // first push attempt
+  try {
+    console.log(`> git push -u ${REMOTE} ${BRANCH}`);
+    safe(`git push -u ${REMOTE} ${BRANCH}`);
+    console.log("commit-push: pushed successfully.");
+    return;
+  } catch (e) {
+    // fallthrough
+  }
+
+  // handle non-fast-forward: fetch, rebase, retry
+  console.log("Push rejected (non-fast-forward). Rebasing onto remote and retrying...");
+  safe(`git fetch ${REMOTE} ${BRANCH}`);
+  try {
+    // try rebase with fewer prompts and no advice noise
+    safe(`git -c advice.mergeConflict=false rebase --rebase-merges ${REMOTE}/${BRANCH}`);
+  } catch (e) {
+    console.error("Rebase failed. Resolve conflicts then re-run with --apply.");
+    console.error(String(e?.message || e));
+    const status = safe("git status --porcelain=1 || true");
+    console.log(status);
+    process.exitCode = 2;
+    return;
+  }
+
+  try {
+    console.log(`> git push -u ${REMOTE} ${BRANCH}`);
+    safe(`git push -u ${REMOTE} ${BRANCH}`);
+    console.log("commit-push: pushed after rebase.");
+  } catch (e) {
+    throw new Error(`Final push failed:\n${String(e?.message || e)}`);
+  }
+}
+
+// ------------------------------ main ------------------------------------
+
+async function main() {
+  // one-shot early exit for scaffold
+  if (await maybeScaffoldMvp()) return;
+
+  // default behavior if no tasks were specified
+  if (TASKS.length === 0) {
+    console.log("# sanity: show Node version (should be >= 18)");
+    console.log(process.version);
+    console.log("\n# smoke test: diagnostics + YAML check (no commits, no push)");
+    await diagnose();
+    await yamlCheck();
+    return;
+  }
+
+  for (const task of TASKS) {
+    switch (task) {
+      case "diagnose":
+        await diagnose();
+        break;
+      case "yaml-check":
+        await yamlCheck();
+        break;
+      case "write-test-change":
+        await writeTestChange();
+        break;
+      case "commit-push":
+        await commitAndPush();
+        break;
+      case "scaffold-mvp": {
+        // If you combined scaffold with other tasks, run it inline here too.
+        const mod = await import("./scaffold-mvp.mjs");
+        await mod.run();
+        break;
+      }
+      default:
+        console.log(`Unknown task: ${task}`);
+        process.exitCode = 1;
+        return;
+    }
+  }
+}
+
+main().catch((err) => {
+  console.error(err?.stack || err?.message || String(err));
+  process.exitCode = 1;
+});
