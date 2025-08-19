@@ -18,7 +18,7 @@ jobs:
       CI: "true"
       NEXT_TELEMETRY_DISABLED: "1"
       REGION: ${{ inputs.region }}
-      # Deploy secrets (conditional deploy)
+      # Deploy (only used if present)
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
@@ -39,9 +39,7 @@ jobs:
           cache: "npm"
 
       - name: Debug - initial tree
-        run: |
-          pwd
-          ls -la || true
+        run: pwd && ls -la || true
 
       - name: Ensure project scaffold (safe for non-empty repo)
         shell: bash
@@ -58,9 +56,7 @@ jobs:
           fi
 
       - name: Debug - post-scaffold tree
-        run: |
-          ls -la
-          node -e "try{console.log(require('./package.json').name||'no-name')}catch(e){console.log('no-package')}" || true
+        run: ls -la && node -e "try{console.log(require('./package.json').name||'no-name')}catch(e){console.log('no-package')}"
 
       - name: Bootstrap content generator files
         run: node scripts/bootstrap.mjs
@@ -87,7 +83,7 @@ jobs:
           fi
 
       - name: Deploy to Vercel (Production)
-        if: ${{ env.VERCEL_TOKEN != '' && env.VERCEL_ORG_ID != '' && env.VERCEL_PROJECT_ID != '' }}
+        if: ${{ env.VERCEL_TOKEN && env.VERCEL_ORG_ID && env.VERCEL_PROJECT_ID }}
         run: |
           npm i -g vercel@latest
           vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
@@ -95,6 +91,5 @@ jobs:
           echo "DEPLOY_URL=$DEPLOY_URL" >> $GITHUB_ENV
 
       - name: Show Deployment URL
-        if: ${{ env.VERCEL_TOKEN != '' && env.VERCEL_ORG_ID != '' && env.VERCEL_PROJECT_ID != '' }}
-        run: |
-          echo "Deployed: $DEPLOY_URL"
+        if: ${{ env.DEPLOY_URL }}
+        run: echo "Deployed: $DEPLOY_URL"
