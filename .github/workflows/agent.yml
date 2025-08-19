@@ -62,16 +62,36 @@ jobs:
       - name: Test
         run: npm run test --if-present
 
-      - name: Git config
-        run: git config user.name "contentgen-agent" && git config user.email "actions@users.noreply.github.com"
+            - name: Git config
+        shell: bash
+        run: |
+          git config user.name "contentgen-agent"
+          git config user.email "actions@users.noreply.github.com"
 
       - name: Commit changes (if any)
-        run: bash -lc 'git add -A && if ! git diff --cached --quiet; then git commit -m "chore(agent): scaffold/update content generator" && git push || true; else echo "No changes to commit."; fi'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(agent): scaffold/update content generator"
+            git push || true
+          else
+            echo "No changes to commit."
+          fi
 
       - name: Deploy to Vercel (Production)
         if: ${{ env.VERCEL_TOKEN && env.VERCEL_ORG_ID && env.VERCEL_PROJECT_ID }}
-        run: bash -lc 'npm i -g vercel@latest && vercel pull --yes --environment=production --token="$VERCEL_TOKEN" && DEPLOY_URL=$(vercel deploy --prod --token="$VERCEL_TOKEN") && echo "DEPLOY_URL=$DEPLOY_URL" >> "$GITHUB_ENV"'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm i -g vercel@latest
+          vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+          DEPLOY_URL=$(vercel deploy --prod --token="$VERCEL_TOKEN")
+          echo "DEPLOY_URL=$DEPLOY_URL" >> "$GITHUB_ENV"
 
       - name: Show Deployment URL
         if: ${{ env.DEPLOY_URL }}
-        run: echo "Deployed: $DEPLOY_URL"
+        shell: bash
+        run: |
+          echo "Deployed: $DEPLOY_URL"
