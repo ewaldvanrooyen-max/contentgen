@@ -1,0 +1,33 @@
+name: scaffold-mvp
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Actually commit & push the scaffold"
+        type: boolean
+        default: true
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - name: Install minimal deps
+        run: npm i --no-audit --no-fund
+      - name: Run scaffold
+        run: node scripts/agent.mjs --task scaffold-mvp
+      - name: Commit & push
+        if: ${{ inputs.apply == true }}
+        run: |
+          git config user.name "contentgen-agent"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes."
+          else
+            git commit -m "feat(scaffold): contentgen MVP"
+            git push
+          fi
