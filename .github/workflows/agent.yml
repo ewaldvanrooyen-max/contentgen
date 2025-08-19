@@ -1,83 +1,90 @@
 name: contentgen-agent
 
 on:
-  push:
-    branches: [ main ]          # auto runs on push
-  workflow_dispatch:            # and can be run manually with inputs
+  workflow_dispatch:
     inputs:
-      apply:   { type: boolean, default: true }
-      commit:  { type: string,  default: "chore(agent): automated push" }
-      branch:  { type: string,  default: "" }
-      force:   { type: boolean, default: false }
-      no_check:{ type: boolean, default: false }
-      fix_tabs:{ type: boolean, default: true }
-      tasks:   { type: string,  default: "diagnose,yaml-check,commit-push" }
-      create_test_change: { type: boolean, default: true }
+      commit_msg:
+        description: Commit message for the run
+        required: false
+        default: "chore(agent): auto-run"
+        type: string
+      no_check:
+        description: Skip YAML validation
+        required: false
+        default: false
+        type: boolean
+      fix_tabs:
+        description: Convert tabs to spaces before YAML parse
+        required: false
+        default: true
+        type: boolean
+  push:
 
 permissions:
   contents: write
 
-concurrency:
-  group: agent-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  run:
+  agent:
     runs-on: ubuntu-latest
-    env:
-      APPLY:        ${{ github.event_name == 'workflow_dispatch' && inputs.apply   || 'true' }}
-      COMMIT_MSG:   ${{ github.event_name == 'workflow_dispatch' && inputs.commit  || 'chore(agent): automated push' }}
-      BRANCH:       ${{ github.event_name == 'workflow_dispatch' && inputs.branch  || '' }}
-      FORCE:        ${{ github.event_name == 'workflow_dispatch' && inputs.force   || 'false' }}
-      NO_CHECK:     ${{ github.event_name == 'workflow_dispatch' && inputs.no_check|| 'false' }}
-      FIX_TABS:     ${{ github.event_name == 'workflow_dispatch' && inputs.fix_tabs|| 'true' }}
-      TASKS:        ${{ github.event_name == 'workflow_dispatch' && inputs.tasks   || 'diagnose,yaml-check,commit-push' }}
-      CREATE_TEST:  ${{ github.event_name == 'workflow_dispatch' && inputs.create_test_change || 'false' }}
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: npm
 
-      - name: Install agent deps
+      - name: Ensure runtime deps for agent script
         run: |
-          npm init -y >/dev/null 2>&1 || true
-          npm i -D yaml fast-glob
-
-      - name: Optional test change
-        if: ${{ env.CREATE_TEST == 'true' }}
-        run: echo "agent ping $(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> AGENT_TEST.txt
+          npm i -D yaml fast-glob || true
 
       - name: Run agent
-        shell: bash
         env:
-          GIT_AUTHOR_NAME: contentgen-agent
-          GIT_AUTHOR_EMAIL: actions@users.noreply.github.com
-          GIT_COMMITTER_NAME: contentgen-agent
-          GIT_COMMITTER_EMAIL: actions@users.noreply.github.com
+          # Optional tokens if you later want deploy steps:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+          # Agent config
+          AGENT_REMOTE: origin
+          AGENT_BRANCH: ${{ github.ref_name }}
+          AGENT_TEST_FILE: .agent_heartbeat
+
+          # Inputs
+          NO_CHECK: ${{ github.event_name == 'workflow_dispatch' && inputs.no_check || false }}
+          FIX_TABS: ${{ github.event_name == 'workflow_dispatch' && inputs.fix_tabs || true }}
+          COMMIT_MSG: ${{ github.event_name == 'workflow_dispatch' && inputs.commit_msg || 'chore(agent): auto-run' }}
+        shell: bash
         run: |
           set -euo pipefail
-          ARGS=()
-          [ "${APPLY}" = "true" ]    && ARGS+=(--apply)
-          [ "${FORCE}" = "true" ]    && ARGS+=(--force)
-          [ "${NO_CHECK}" = "true" ] && ARGS+=(--no-check)
-          [ "${FIX_TABS}" = "true" ] && ARGS+=(--fix)
-          [ -n "${BRANCH}" ]         && ARGS+=(--branch "${BRANCH}")
-          ARGS+=(--commit "${COMMIT_MSG}")
-          IFS=',' read -ra TS <<< "${TASKS}"
-          for t in "${TS[@]}"; do ARGS+=(--task "$t"); done
-          node scripts/agent.mjs "${ARGS[@]}" --push
 
-      - name: Upload agent report
+          git config user.name  "contentgen-agent"
+          git config user.email "actions@users.noreply.github.com"
+
+          # Make sure we’re on the same branch the workflow is running on
+          git checkout "${AGENT_BRANCH}" || true
+
+          FLAGS=( --apply
+                  --task write-test-change
+                  --task yaml-check
+                  --task commit-push
+                  --commit "${COMMIT_MSG}" )
+
+          # pass optional flags based on inputs
+          if [[ "${NO_CHECK}" == "true" ]]; then FLAGS+=( --no-check ); fi
+          if [[ "${FIX_TABS}" == "true" ]]; then FLAGS+=( --fix ); fi
+
+          node scripts/agent.mjs "${FLAGS[@]}"
+
+      - name: Upload agent run report
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: agent-report
           path: agent_reports/latest.json
-
-      - name: Show last commits
-        run: git --no-pager log --oneline -n 5
+          if-no-files-found: warn
