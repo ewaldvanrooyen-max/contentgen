@@ -15,7 +15,6 @@ jobs:
   build_and_deploy:
     runs-on: ubuntu-latest
 
-    # Make every step run in bash so we don't have to repeat shell: bash
     defaults:
       run:
         shell: bash
@@ -24,13 +23,9 @@ jobs:
       CI: "true"
       NEXT_TELEMETRY_DISABLED: "1"
       REGION: ${{ inputs.region }}
-
-      # Deploy (used only if present)
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-
-      # App secrets
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       AFFILIATE_BASE_URL: ${{ secrets.AFFILIATE_BASE_URL }}
       AFFILIATE_TAG: ${{ secrets.AFFILIATE_TAG }}
