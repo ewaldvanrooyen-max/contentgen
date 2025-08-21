@@ -1,0 +1,48 @@
+name: pr-guard
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch: {}
+
+permissions: {}
+
+jobs:
+  conflict-markers:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fail if git conflict markers exist
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Scan typical text/code files + workflows + generated content
+          GLOBS=(
+            '*.md' '*.mdx' '*.yml' '*.yaml' '*.json'
+            '*.js' '*.mjs' '*.cjs' '*.ts' '*.tsx'
+            'content/**' 'scripts/**' '.github/workflows/**'
+          )
+
+          shopt -s globstar nullglob
+          files=()
+          for g in "${GLOBS[@]}"; do
+            for f in $g; do files+=("$f"); done
+          done
+
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No files to scan."
+            exit 0
+          fi
+
+          # Look for classic merge-conflict markers
+          if grep -RInE '^(<<<<<<<|=======$|>>>>>>> .*)' -- "${files[@]}"; then
+            echo "::error::Conflict markers found. Resolve them before merging."
+            exit 1
+          fi
+
+          echo "OK – no conflict markers."
