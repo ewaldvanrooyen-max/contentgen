@@ -51,13 +51,11 @@ jobs:
       - name: Install agent deps
         run: npm i -D yaml fast-glob
 
-      # Sanity: prove the runner is sane
       - name: Sanity check
         run: |
           node -v
           echo "Repo: $GITHUB_REPOSITORY  Event: $GITHUB_EVENT_NAME"
 
-      # Decide dry-run vs apply at runtime, also build commit message safely
       - name: Run agent
         shell: bash
         env:
@@ -68,20 +66,18 @@ jobs:
         run: |
           set -euo pipefail
 
-          # work out apply/dry-run
+          # apply on manual runs, dry-run on push
           if [[ "${EVENT}" == "workflow_dispatch" ]]; then
             APPLY="--apply"
           else
             APPLY=""
           fi
 
-          # commit message (inputs.* exists only on dispatch; handle empty)
           COMMIT_MSG="${INPUT_COMMIT_MSG:-}"
           if [[ -z "${COMMIT_MSG}" ]]; then
             COMMIT_MSG="chore(agent): automated change"
           fi
 
-          # optional toggles to pass to the script later if you wire them in
           EXTRA_OPTS=()
           if [[ "${SKIP_CHECKS}" == "true" ]]; then
             EXTRA_OPTS+=("--no-check")
@@ -92,7 +88,6 @@ jobs:
 
           echo "Running agent with: ${APPLY:-<dry-run>}  commit='${COMMIT_MSG}'  extras='${EXTRA_OPTS[*]-}'"
 
-          # core tasks; safe on push (dry-run), applies on manual runs
           node scripts/agent.mjs ${APPLY} \
             --task diagnose \
             --task yaml-check \
