@@ -1,117 +1,71 @@
 name: contentgen
 
 on:
-  # run by hand with inputs
   workflow_dispatch:
     inputs:
       max:
-        description: "How many posts to generate"
+        description: "How many posts to make"
         required: false
         default: "1"
       dry:
         description: "Dry run (true/false)"
         required: false
-        default: "false"
+        default: "true"
       topic:
-        description: "Generate only for this topic (optional)"
+        description: "Optional topic filter"
         required: false
-        default: ""
-  # schedule (UTC). tweak as you like.
   schedule:
-    - cron: "17 06 * * 2,5"
-
-permissions:
-  contents: write
-
-concurrency:
-  group: contentgen
-  cancel-in-progress: false
+    - cron: "17 7 * * *" # adjust as you like (UTC)
 
 jobs:
-  generate:
+  run:
     runs-on: ubuntu-latest
-
-    # fallbacks so schedule runs even without workflow inputs
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
-      CI_MAX: ${{ github.event_name == 'workflow_dispatch' && inputs.max || '1' }}
-      CI_DRY: ${{ github.event_name == 'workflow_dispatch' && inputs.dry || 'false' }}
-      CI_TOPIC: ${{ github.event_name == 'workflow_dispatch' && inputs.topic || '' }}
-
+      OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-4o-mini' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node
+      - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: npm
 
-      - name: Ensure deps (openai only needed for non-dry runs)
+      - name: Install deps
+        run: npm ci || npm i
+
+      - name: Generate content
         shell: bash
         run: |
           set -euo pipefail
-          if [ ! -f package.json ]; then
-            npm init -y
-          fi
-          # install openai for live generations (dynamic import in our script)
-          npm i -S openai@^4
 
-      - name: Run content generator
+          if [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "::warning::OPENAI_API_KEY is not set; forcing dry mode."
+            DRY=true
+          else
+            DRY="${{ inputs.dry || 'false' }}"
+          fi
+
+          MAX="${{ inputs.max || '1' }}"
+          TOPIC="${{ inputs.topic || '' }}"
+          EXTRA=()
+          [ -n "$TOPIC" ] && EXTRA+=(--topic "$TOPIC")
+
+          # --dry expands only if DRY is true
+          node scripts/contentgen.mjs ${DRY:+--dry} --max "$MAX" "${EXTRA[@]}"
+
+      - name: Commit & push (if any)
         shell: bash
         run: |
-          set -euo pipefail
-          DRY="${CI_DRY}"
-          MAX="${CI_MAX}"
-          TOPIC="${CI_TOPIC}"
-
-          CMD="node scripts/contentgen.mjs --max ${MAX}"
-          if [ -n "${TOPIC}" ]; then
-            # shell-safe append of topic
-            CMD="${CMD} --topic \"${TOPIC}\""
-          fi
-
-          # force dry when no key available
-          if [ -z "${OPENAI_API_KEY}" ] || [ "${DRY}" = "true" ]; then
-            CMD="${CMD} --dry"
-          fi
-
-          echo "Running: ${CMD}"
-          eval ${CMD}
-
-      - name: Upload agent report
-        uses: actions/upload-artifact@v4
-        with:
-          name: agent-report
-          path: agent_reports/latest.json
-          if-no-files-found: warn
-
-      - name: Commit & push (rebase-safe)
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name  "contentgen-agent"
+          git config user.name "contentgen-agent"
           git config user.email "actions@users.noreply.github.com"
-
-          # keep agent_reports/ out of git (safe if already present)
-          grep -qxF 'agent_reports/' .gitignore || echo 'agent_reports/' >> .gitignore
-
-          # stage & commit if there are changes
-          if git diff --quiet && git diff --cached --quiet; then
-            echo "No changes to commit."
-            exit 0
-          fi
-
           git add -A
-          git commit -m "chore(content): automated content update"
-
-          # push with rebase retry for non-fast-forward cases
-          BRANCH="${GITHUB_REF_NAME:-main}"
-          git push -u origin "${BRANCH}" || {
-            echo "Push rejected (non-fast-forward). Rebasing onto remote and retrying..."
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "chore(content): auto-generate"
             git fetch origin main
-            git rebase origin/main || true
-            git push -u origin "${BRANCH}"
-          }
+            git pull --rebase origin main || true
+            git push
+          fi
