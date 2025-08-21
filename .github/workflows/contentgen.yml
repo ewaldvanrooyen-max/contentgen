@@ -3,69 +3,69 @@ name: contentgen
 on:
   workflow_dispatch:
     inputs:
-      max:
-        description: "How many posts to make"
+      prompt:
+        description: "High-level prompt (optional)"
         required: false
-        default: "1"
+        default: ""
       dry:
-        description: "Dry run (true/false)"
+        description: "Dry-run (no writes/commits)"
         required: false
         default: "true"
-      topic:
-        description: "Optional topic filter"
+      max:
+        description: "Max items to generate"
         required: false
-  schedule:
-    - cron: "17 7 * * *" # adjust as you like (UTC)
+        default: "1"
+
+permissions:
+  contents: write
 
 jobs:
   run:
     runs-on: ubuntu-latest
-    env:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-4o-mini' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Node
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: npm
 
       - name: Install deps
         run: npm ci || npm i
 
-      - name: Generate content
+      # IMPORTANT: ignore node_modules, .git, agent_reports etc
+      - name: Fail if git conflict markers exist
         shell: bash
         run: |
           set -euo pipefail
-
-          if [ -z "${OPENAI_API_KEY:-}" ]; then
-            echo "::warning::OPENAI_API_KEY is not set; forcing dry mode."
-            DRY=true
+          if grep -RIn \
+               --exclude-dir=".git" \
+               --exclude-dir="node_modules" \
+               --exclude-dir="agent_reports" \
+               --exclude-dir=".next" \
+               --exclude-dir="dist" \
+               -E '^(<<<<<<< |=======$|>>>>>>> )' . ; then
+            echo "Conflict markers found. Fix them before merging."
+            exit 1
           else
-            DRY="${{ inputs.dry || 'false' }}"
+            echo "No conflict markers found."
           fi
 
-          MAX="${{ inputs.max || '1' }}"
-          TOPIC="${{ inputs.topic || '' }}"
-          EXTRA=()
-          [ -n "$TOPIC" ] && EXTRA+=(--topic "$TOPIC")
-
-          # --dry expands only if DRY is true
-          node scripts/contentgen.mjs ${DRY:+--dry} --max "$MAX" "${EXTRA[@]}"
-
-      - name: Commit & push (if any)
-        shell: bash
+      - name: Run generator
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          git config user.name "contentgen-agent"
-          git config user.email "actions@users.noreply.github.com"
-          git add -A
-          if git diff --cached --quiet; then
-            echo "No changes to commit."
-          else
-            git commit -m "chore(content): auto-generate"
-            git fetch origin main
-            git pull --rebase origin main || true
-            git push
-          fi
+          node scripts/contentgen.mjs \
+            --prompt "${{ github.event.inputs.prompt }}" \
+            --dry "${{ github.event.inputs.dry }}" \
+            --max "${{ github.event.inputs.max }}"
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: contentgen-report
+          path: agent_reports/latest.json
+          if-no-files-found: ignore
