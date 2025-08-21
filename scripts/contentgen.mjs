@@ -1,182 +1,257 @@
 #!/usr/bin/env node
-// scripts/contentgen.mjs
-// Minimal content generator: writes Markdown with YAML front-matter.
-// Dry-run safe: `--dry` avoids calling OpenAI.
+// Content generator: reads YAML config + topics and produces Markdown files.
+// No extra SDK required; uses fetch() to call OpenAI Chat Completions.
 
-import fs from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import YAML from "yaml";
 
+// ---------- tiny helpers ----------
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const ROOT = path.resolve(__dirname, "..");
+const repoRoot = path.resolve(__dirname, "..");
 
-const args = new Set(process.argv.slice(2));
-const getArg = (flag, fallback = null) => {
-  const a = process.argv.slice(2);
-  const i = a.indexOf(flag);
-  return i >= 0 && a[i + 1] ? a[i + 1] : fallback;
-};
-
-const DRY = args.has("--dry");
-const MAX = Number(getArg("--max", "1"));
-const INLINE_TOPIC = getArg("--topic", null);
-const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
-const API_KEY = process.env.OPENAI_API_KEY || "";
-
-function log(...x) {
-  console.log("[contentgen]", ...x);
-}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const nowISO = () => new Date().toISOString();
 
 function slugify(s) {
   return String(s)
     .toLowerCase()
     .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 80);
+    .replace(/[^\w\s-]/g, "")
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-");
 }
 
-function ensureDir(p) {
-  fs.mkdirSync(p, { recursive: true });
+async function ensureDir(p) {
+  await fs.mkdir(p, { recursive: true });
 }
 
-function todayISO() {
-  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-}
-
-function readTopics() {
-  if (INLINE_TOPIC) return [INLINE_TOPIC];
-  const p = path.join(ROOT, "topics.json");
-  if (!fs.existsSync(p)) {
-    return [];
-  }
+async function readIfExists(p, fallback = "") {
   try {
-    const raw = fs.readFileSync(p, "utf8").trim();
-    const data = JSON.parse(raw || "[]");
-    if (Array.isArray(data)) return data;
-    if (Array.isArray(data.topics)) return data.topics;
-    return [];
-  } catch (e) {
-    log("WARN: failed to parse topics.json:", e.message);
-    return [];
+    return await fs.readFile(p, "utf8");
+  } catch {
+    return fallback;
   }
 }
 
-function buildFrontMatter({ title, tags = [], summary = "" }) {
-  const clean = (v) => String(v ?? "").replace(/"/g, '\\"');
-  const arr = (a) => (Array.isArray(a) ? a : []);
-  return `---\ntitle: "${clean(title)}"\ndate: "${todayISO()}"\ntags: [${arr(tags).map(t => `"${clean(t)}"`).join(", ")}]\nsummary: "${clean(summary)}"\n---\n\n`;
+function parseArgs(argv = process.argv.slice(2)) {
+  const args = new Set(argv);
+  const get = (k, d = null) => {
+    const i = argv.indexOf(k);
+    return i >= 0 && argv[i + 1] ? argv[i + 1] : d;
+  };
+  return {
+    dry: args.has("--dry"),
+    max: Number(get("--max", "0")) || 0,
+    configPath: get("--config", path.join(repoRoot, "contentgen", "config.yaml")),
+    topicsPath: get("--topics", path.join(repoRoot, "contentgen", "topics.yaml")),
+    outDir: get("--out", path.join(repoRoot, "content")),
+    delayMs: Number(get("--delay", "500")) || 500,
+  };
 }
 
-function buildDryMarkdown(topic) {
-  const fm = buildFrontMatter({
-    title: topic,
-    tags: ["draft", "placeholder"],
-    summary: "Placeholder article (dry run).",
-  });
-  const body =
-    `# ${topic}\n\n` +
-    `This is a dry-run placeholder. Replace this by running the generator without \`--dry\`, or let the GitHub Action create a real article.\n\n` +
-    `- why it matters\n- what you’ll learn\n- next steps\n\n` +
-    `> Tip: add more topics in \`topics.json\`.\n`;
-  return fm + body;
-}
-
-async function buildOpenAIMarkdown(topic) {
-  // dynamic import so `--dry` users don’t need the package installed to test
-  const { default: OpenAI } = await import("openai");
-  const client = new OpenAI({ apiKey: API_KEY });
-
-  const system =
-    "You are a helpful writing assistant. Return ONLY valid Markdown with a YAML front-matter header. The header must be between '---' fences and contain title, date, tags (array), summary. Do not wrap the Markdown in code fences.";
-
-  const user =
-    `Write a concise, helpful article (600–900 words) about: "${topic}". ` +
-    `Audience: developers & makers. Keep it practical. Include a short summary in the front-matter.`;
-
-  const res = await client.chat.completions.create({
-    model: MODEL,
-    messages: [
-      { role: "system", content: system },
-      { role: "user", content: user },
-    ],
-    temperature: 0.7,
-  });
-
-  const md = res.choices?.[0]?.message?.content?.trim() || "";
-  if (!md.startsWith("---")) {
-    // if model ignored the instruction, add a minimal front-matter
-    const fm = buildFrontMatter({ title: topic, tags: ["ai", "writing"] });
-    return fm + md;
+// Light .env loader (optional, only if file exists). No dependency on dotenv.
+async function loadDotEnv() {
+  const envPath = path.join(repoRoot, ".env");
+  try {
+    const raw = await fs.readFile(envPath, "utf8");
+    raw
+      .split(/\r?\n/)
+      .filter((l) => l && !l.trim().startsWith("#"))
+      .forEach((line) => {
+        const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
+        if (!m) return;
+        const [, k, vRaw] = m;
+        if (process.env[k]) return; // don't override
+        const v = vRaw.replace(/^"(.*)"$/, "$1").replace(/^'(.*)'$/, "$1");
+        process.env[k] = v;
+      });
+  } catch {
+    // no-op if .env not present
   }
-  return md;
 }
 
-function computeOutPath(topic) {
-  const date = todayISO();
-  const slug = slugify(topic || "untitled");
-  const dir = path.join(ROOT, "content", date.slice(0, 4), date.slice(5, 7));
-  ensureDir(dir);
-  return path.join(dir, `${date}-${slug}.md`);
+async function readYaml(p) {
+  const txt = await fs.readFile(p, "utf8");
+  return YAML.parse(txt);
 }
 
-async function main() {
-  log(`dry: ${DRY ? "yes" : "no"} | model: ${MODEL}`);
+function applyTemplate(tpl, ctx) {
+  return String(tpl).replace(/\{(\w+)\}/g, (_, k) =>
+    Object.prototype.hasOwnProperty.call(ctx, k) ? String(ctx[k]) : `{${k}}`
+  );
+}
 
-  let topics = readTopics();
-  if (INLINE_TOPIC && !topics.includes(INLINE_TOPIC)) topics.unshift(INLINE_TOPIC);
-  if (!topics.length) {
-    // bootstrap a topics.json so the user sees the shape
-    const bootstrap = {
-      topics: [
-        "Why content agents accelerate projects",
-        "A practical guide to GitHub Actions for side projects",
-        "Shipping faster with small daily commits",
+async function callOpenAI({ model, temperature, system, user, apiKey }) {
+  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      temperature,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
       ],
-    };
-    const p = path.join(ROOT, "topics.json");
-    fs.writeFileSync(p, JSON.stringify(bootstrap, null, 2) + "\n");
-    topics = bootstrap.topics;
-    log("Created topics.json with sample topics.");
+    }),
+  });
+
+  const text = await res.text();
+  if (!res.ok) {
+    let msg = `OpenAI error (${res.status})`;
+    try {
+      const j = JSON.parse(text);
+      msg += `: ${j?.error?.message || text}`;
+    } catch {
+      msg += `: ${text}`;
+    }
+    throw new Error(msg);
   }
 
-  const chosen = topics.slice(0, Math.max(1, MAX));
-  log(`generating ${chosen.length} post(s)`);
+  const json = JSON.parse(text);
+  const content = json?.choices?.[0]?.message?.content?.trim() || "";
+  return content;
+}
 
-  const results = [];
-  for (const topic of chosen) {
-    const out = computeOutPath(topic);
-    if (fs.existsSync(out)) {
-      log(`skip: already exists -> ${path.relative(ROOT, out)}`);
+function stripFences(md) {
+  // remove ```xxx fenced wrappers if LLM returns them
+  const fence = md.match(/^```[a-zA-Z]*\n([\s\S]*?)\n```$/);
+  return fence ? fence[1].trim() : md;
+}
+
+// ---------- main ----------
+async function main() {
+  await loadDotEnv();
+  const args = parseArgs();
+
+  console.log("# contentgen: start");
+  console.log(`  dry: ${args.dry}  max: ${args.max || "all"}  out: ${args.outDir}`);
+  console.log(`  config: ${args.configPath}`);
+  console.log(`  topics: ${args.topicsPath}`);
+
+  const config = await readYaml(args.configPath);
+  const topics = await readYaml(args.topicsPath);
+
+  if (!Array.isArray(topics) || topics.length === 0) {
+    throw new Error(`No topics found in ${args.topicsPath}`);
+  }
+
+  const apiKey = process.env.OPENAI_API_KEY || "";
+  if (!args.dry && !apiKey) {
+    throw new Error(
+      "OPENAI_API_KEY not set. Add it to your Codespace secrets or a local .env (OPENAI_API_KEY=sk-...)."
+    );
+  }
+
+  const outDir = args.outDir || config.outDir || path.join(repoRoot, "content");
+  await ensureDir(outDir);
+
+  const limit = args.max > 0 ? Math.min(args.max, topics.length) : topics.length;
+  const picked = topics.slice(0, limit);
+
+  const report = {
+    startedAt: nowISO(),
+    model: config.model,
+    outDir,
+    dry: !!args.dry,
+    generated: [],
+    errors: [],
+  };
+
+  for (let i = 0; i < picked.length; i++) {
+    const t = picked[i];
+    const slug = slugify(t.slug || t.title || `item-${i + 1}`);
+    const ctx = {
+      ...t,
+      slug,
+      today: new Date().toISOString().split("T")[0],
+    };
+
+    const system = applyTemplate(
+      config.system ||
+        "You are a precise, helpful writing assistant. Always return clean Markdown with YAML frontmatter.",
+      ctx
+    );
+
+    const user = applyTemplate(
+      config.user ||
+        [
+          "Write a {type|blog post} titled \"{title}\" for {audience}.",
+          "Use an engaging, helpful, non-hype tone.",
+          "Return **Markdown** including YAML frontmatter with: title, description, date, tags (array), draft (boolean), and slug.",
+          "Keep it concise but complete. Avoid placeholders.",
+          "Description: {description}",
+          "Suggested tags: {tags}",
+        ].join("\n"),
+      ctx
+    );
+
+    const filename = `${slug}.${config.ext || "mdx"}`;
+    const outPath = path.join(outDir, filename);
+
+    console.log(`\n[${i + 1}/${picked.length}] ${t.title} -> ${outPath}`);
+
+    if (args.dry) {
+      report.generated.push({ slug, outPath, dry: true });
       continue;
     }
 
-    const md = DRY ? buildDryMarkdown(topic) : await buildOpenAIMarkdown(topic);
-    if (DRY) {
-      log(`DRY RUN would write -> ${path.relative(ROOT, out)}`);
-    } else {
-      fs.writeFileSync(out, md, "utf8");
-      log(`wrote -> ${path.relative(ROOT, out)}`);
-      results.push(out);
+    try {
+      const markdown = stripFences(
+        await callOpenAI({
+          model: config.model || "gpt-4o-mini",
+          temperature: typeof config.temperature === "number" ? config.temperature : 0.4,
+          system,
+          user,
+          apiKey,
+        })
+      );
+
+      // Ensure a minimal frontmatter exists (best effort)
+      const hasFrontmatter = /^---\n[\s\S]+?\n---\n/.test(markdown);
+      const content =
+        hasFrontmatter
+          ? markdown
+          : `---\ntitle: "${t.title}"\ndescription: "${t.description || ""}"\ndate: "${ctx.today}"\ntags: ${JSON.stringify(t.tags || [])}\ndraft: true\nslug: "${slug}"\n---\n\n${markdown}`;
+
+      await fs.writeFile(outPath, content, "utf8");
+      report.generated.push({ slug, outPath, bytes: content.length });
+      await sleep(args.delayMs);
+    } catch (err) {
+      console.error("  ! Error:", err.message);
+      report.errors.push({ slug, message: err.message });
     }
   }
 
-  // Print a tiny machine-readable summary (useful for future workflows)
-  const reportDir = path.join(ROOT, "agent_reports");
-  ensureDir(reportDir);
-  const latest = {
-    ok: true,
-    dry: DRY,
-    written: results.map((p) => path.relative(ROOT, p)),
-    at: new Date().toISOString(),
-  };
-  fs.writeFileSync(path.join(reportDir, "latest.json"), JSON.stringify(latest, null, 2));
-  log("done.");
+  report.finishedAt = nowISO();
+
+  // Also emit a small agent report so the workflow can upload it.
+  try {
+    const repDir = path.join(repoRoot, "agent_reports");
+    await ensureDir(repDir);
+    await fs.writeFile(path.join(repDir, "latest.json"), JSON.stringify(report, null, 2));
+  } catch {
+    // ignore
+  }
+
+  console.log("\n# contentgen: done");
+  console.log(
+    `  ok: ${report.generated.length - report.errors.length
+    }  errors: ${report.errors.length}  out: ${outDir}`
+  );
+
+  if (report.errors.length) {
+    process.exitCode = 2;
+  }
 }
 
 main().catch((e) => {
   console.error(e);
-  process.exit(1);
+  process.exitCode = 1;
 });
