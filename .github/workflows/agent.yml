@@ -1,44 +1,43 @@
 name: contentgen-agent
 
 on:
-  workflow_dispatch:
-    inputs:
-      apply:
-        description: "Actually commit and push (true/false)"
-        required: false
-        default: "false"
-      no_check:
-        description: "Skip YAML lint (true/false)"
-        required: false
-        default: "false"
-      fix_tabs:
-        description: "Auto-fix tabs/whitespace before commit (true/false)"
-        required: false
-        default: "true"
-      commit_msg:
-        description: "Commit message used when apply=true"
-        required: false
-        default: "chore(agent): automated run"
   push:
     branches: [ main ]
-    paths:
-      - ".github/workflows/agent.yml"
-      - "scripts/agent.mjs"
-  schedule:
-    - cron: "17 5 * * *"  # daily because why not
+  workflow_dispatch:
+    inputs:
+      commit_msg:
+        description: "Optional commit message for a manual run"
+        required: false
+        default: ""
+      no_check:
+        description: "Skip repo checks (diagnostics)"
+        type: boolean
+        required: false
+        default: false
+      fix_tabs:
+        description: "Auto-fix whitespace/tabs when committing"
+        type: boolean
+        required: false
+        default: true
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: contentgen-agent-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  AGENT_REMOTE: origin
+  AGENT_BRANCH: main
+
 jobs:
   agent:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout repo
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -49,22 +48,64 @@ jobs:
           node-version: "20"
           cache: "npm"
 
-      - name: Install runtime deps for agent script
-        run: |
-          npm i -D yaml fast-glob
+      - name: Install agent deps
+        run: npm i -D yaml fast-glob
 
-      - name: Dry run — diagnostics + YAML check
-        env:
-          AGENT_NO_CHECK: ${{ inputs.no_check }}
-          AGENT_FIX_TABS: ${{ inputs.fix_tabs }}
+      # Sanity: prove the runner is sane
+      - name: Sanity check
         run: |
-          node scripts/agent.mjs --task diagnose --task yaml-check
+          node -v
+          echo "Repo: $GITHUB_REPOSITORY  Event: $GITHUB_EVENT_NAME"
 
-      - name: Commit & push (only when apply=true)
-        if: ${{ inputs.apply == 'true' }}
+      # Decide dry-run vs apply at runtime, also build commit message safely
+      - name: Run agent
+        shell: bash
         env:
-          AGENT_NO_CHECK: ${{ inputs.no_check }}
-          AGENT_FIX_TABS: ${{ inputs.fix_tabs }}
-          AGENT_COMMIT_MSG: ${{ inputs.commit_msg }}
+          EVENT: ${{ github.event_name }}
+          INPUT_COMMIT_MSG: ${{ inputs.commit_msg }}
+          SKIP_CHECKS: ${{ inputs.no_check }}
+          FIX_TABS: ${{ inputs.fix_tabs }}
         run: |
-          node scripts/agent.mjs --apply --task commit-push --commit "${AGENT_COMMIT_MSG}"
+          set -euo pipefail
+
+          # work out apply/dry-run
+          if [[ "${EVENT}" == "workflow_dispatch" ]]; then
+            APPLY="--apply"
+          else
+            APPLY=""
+          fi
+
+          # commit message (inputs.* exists only on dispatch; handle empty)
+          COMMIT_MSG="${INPUT_COMMIT_MSG:-}"
+          if [[ -z "${COMMIT_MSG}" ]]; then
+            COMMIT_MSG="chore(agent): automated change"
+          fi
+
+          # optional toggles to pass to the script later if you wire them in
+          EXTRA_OPTS=()
+          if [[ "${SKIP_CHECKS}" == "true" ]]; then
+            EXTRA_OPTS+=("--no-check")
+          fi
+          if [[ "${FIX_TABS}" == "false" ]]; then
+            EXTRA_OPTS+=("--no-fix-tabs")
+          fi
+
+          echo "Running agent with: ${APPLY:-<dry-run>}  commit='${COMMIT_MSG}'  extras='${EXTRA_OPTS[*]-}'"
+
+          # core tasks; safe on push (dry-run), applies on manual runs
+          node scripts/agent.mjs ${APPLY} \
+            --task diagnose \
+            --task yaml-check \
+            --task write-test-change \
+            --task commit-push \
+            --commit "${COMMIT_MSG}" \
+            "${EXTRA_OPTS[@]}"
+
+      - name: Upload agent report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-report
+          path: |
+            agent_reports/**
+            AGENT_TEST.txt
