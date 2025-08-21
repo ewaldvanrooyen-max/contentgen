@@ -1,40 +1,47 @@
 name: contentgen-agent
 
 on:
-  push:
-    branches: [ main ]
+  # Manually runnable with inputs
   workflow_dispatch:
     inputs:
-      commit_msg:
-        description: "Optional commit message for a manual run"
-        required: false
-        default: ""
       no_check:
-        description: "Skip repo checks (diagnostics)"
+        description: "Skip YAML checks"
         type: boolean
-        required: false
         default: false
       fix_tabs:
-        description: "Auto-fix whitespace/tabs when committing"
+        description: "Auto-fix tabs to spaces"
         type: boolean
-        required: false
         default: true
+      force:
+        description: "Force rebase if push is rejected"
+        type: boolean
+        default: false
+      branch:
+        description: "Target branch (blank = current)"
+        type: string
+        default: ""
+      commit:
+        description: "Commit message"
+        type: string
+        default: "chore(agent): automated push"
 
-permissions:
-  contents: write
-  actions: read
-
-concurrency:
-  group: contentgen-agent-${{ github.ref }}
-  cancel-in-progress: false
-
-env:
-  AGENT_REMOTE: origin
-  AGENT_BRANCH: main
+  # Optional: run when this workflow or scripts change
+  push:
+    paths:
+      - ".github/workflows/agent.yml"
+      - "scripts/**"
 
 jobs:
-  agent:
+  run:
     runs-on: ubuntu-latest
+
+    env:
+      # Map inputs (when manually dispatched) into env vars with sane defaults.
+      NO_CHECK: ${{ github.event_name == 'workflow_dispatch' && inputs.no_check || 'false' }}
+      FIX_TABS: ${{ github.event_name == 'workflow_dispatch' && inputs.fix_tabs || 'true' }}
+      FORCE:   ${{ github.event_name == 'workflow_dispatch' && inputs.force   || 'false' }}
+      BRANCH:  ${{ github.event_name == 'workflow_dispatch' && inputs.branch  || '' }}
+      COMMIT_MSG: ${{ github.event_name == 'workflow_dispatch' && inputs.commit || 'chore(agent): automated push' }}
 
     steps:
       - name: Checkout
@@ -46,61 +53,27 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: "npm"
 
       - name: Install agent deps
         run: npm i -D yaml fast-glob
 
-      - name: Sanity check
-        run: |
-          node -v
-          echo "Repo: $GITHUB_REPOSITORY  Event: $GITHUB_EVENT_NAME"
-
       - name: Run agent
         shell: bash
-        env:
-          EVENT: ${{ github.event_name }}
-          INPUT_COMMIT_MSG: ${{ inputs.commit_msg }}
-          SKIP_CHECKS: ${{ inputs.no_check }}
-          FIX_TABS: ${{ inputs.fix_tabs }}
         run: |
           set -euo pipefail
 
-          # apply on manual runs, dry-run on push
-          if [[ "${EVENT}" == "workflow_dispatch" ]]; then
-            APPLY="--apply"
-          else
-            APPLY=""
-          fi
+          ARGS=()
+          [[ "${NO_CHECK}" == "true" ]] && ARGS+=(--no-check)
+          [[ "${FIX_TABS}" == "true" ]] && ARGS+=(--fix)
+          [[ "${FORCE}"   == "true" ]] && ARGS+=(--force)
+          [[ -n "${BRANCH}" ]] && ARGS+=(--branch "${BRANCH}")
+          ARGS+=(--commit "${COMMIT_MSG}")
 
-          COMMIT_MSG="${INPUT_COMMIT_MSG:-}"
-          if [[ -z "${COMMIT_MSG}" ]]; then
-            COMMIT_MSG="chore(agent): automated change"
-          fi
-
-          EXTRA_OPTS=()
-          if [[ "${SKIP_CHECKS}" == "true" ]]; then
-            EXTRA_OPTS+=("--no-check")
-          fi
-          if [[ "${FIX_TABS}" == "false" ]]; then
-            EXTRA_OPTS+=("--no-fix-tabs")
-          fi
-
-          echo "Running agent with: ${APPLY:-<dry-run>}  commit='${COMMIT_MSG}'  extras='${EXTRA_OPTS[*]-}'"
-
-          node scripts/agent.mjs ${APPLY} \
-            --task diagnose \
-            --task yaml-check \
-            --task write-test-change \
-            --task commit-push \
-            --commit "${COMMIT_MSG}" \
-            "${EXTRA_OPTS[@]}"
+          node scripts/agent.mjs "${ARGS[@]}"
 
       - name: Upload agent report
-        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: agent-report
-          path: |
-            agent_reports/**
-            AGENT_TEST.txt
+          path: agent_reports/latest.json
+          if-no-files-found: ignore
