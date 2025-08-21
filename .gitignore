@@ -1,1 +1,23 @@
+# node / build
+node_modules/
+dist/
+.next/
+out/
+coverage/
+*.log
+npm-debug.log*
+yarn-error.log*
+
+# local env & tooling
+.env
+.env.*
+.vercel/
+.vscode/
+.DS_Store
+
+# agent + generator artifacts
 agent_reports/
+AGENT_TEST.txt
+
+# merge leftovers
+*.orig
