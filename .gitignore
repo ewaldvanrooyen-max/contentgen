@@ -21,3 +21,4 @@ AGENT_TEST.txt
 
 # merge leftovers
 *.orig
+.env.local
