@@ -1,48 +1,38 @@
-name: contentgen-agent
+name: contentgen
 
 on:
-  # Manually runnable with inputs
+  # Run every weekday at 06:00 UTC (change as you like)
+  schedule:
+    - cron: "0 6 * * 1-5"
+  # Manual run button with a couple of knobs
   workflow_dispatch:
     inputs:
-      no_check:
-        description: "Skip YAML checks"
-        type: boolean
-        default: false
-      fix_tabs:
-        description: "Auto-fix tabs to spaces"
-        type: boolean
-        default: true
-      force:
-        description: "Force rebase if push is rejected"
-        type: boolean
-        default: false
-      branch:
-        description: "Target branch (blank = current)"
-        type: string
-        default: ""
-      commit:
-        description: "Commit message"
-        type: string
-        default: "chore(agent): automated push"
+      max:
+        description: "Max posts to generate"
+        required: false
+        default: "3"
+      dry_run:
+        description: "Dry run (no files written)"
+        required: false
+        default: "false"
 
-  # Optional: run when this workflow or scripts change
-  push:
-    paths:
-      - ".github/workflows/agent.yml"
-      - "scripts/**"
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: contentgen
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "20"
+  BRANCH: "main"
+  # Must exist in repo/organization secrets
+  OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
 jobs:
-  run:
+  generate:
     runs-on: ubuntu-latest
-
-    env:
-      # Map inputs (when manually dispatched) into env vars with sane defaults.
-      NO_CHECK: ${{ github.event_name == 'workflow_dispatch' && inputs.no_check || 'false' }}
-      FIX_TABS: ${{ github.event_name == 'workflow_dispatch' && inputs.fix_tabs || 'true' }}
-      FORCE:   ${{ github.event_name == 'workflow_dispatch' && inputs.force   || 'false' }}
-      BRANCH:  ${{ github.event_name == 'workflow_dispatch' && inputs.branch  || '' }}
-      COMMIT_MSG: ${{ github.event_name == 'workflow_dispatch' && inputs.commit || 'chore(agent): automated push' }}
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -52,28 +42,64 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
 
-      - name: Install agent deps
-        run: npm i -D yaml fast-glob
+      - name: Install deps
+        run: npm ci || npm i
 
-      - name: Run agent
-        shell: bash
+      - name: Sanity
+        run: |
+          node -v
+          echo "Running on branch: $BRANCH"
+
+      - name: Generate content
+        env:
+          MAX: ${{ github.event.inputs.max || '3' }}
+          DRY: ${{ github.event.inputs.dry_run || 'false' }}
         run: |
           set -euo pipefail
+          if [ "$DRY" = "true" ]; then
+            echo "DRY RUN: generating up to $MAX post(s)"
+            node scripts/contentgen.mjs --dry --max "$MAX"
+          else
+            echo "APPLY: generating up to $MAX post(s)"
+            node scripts/contentgen.mjs --apply --max "$MAX"
+          fi
 
-          ARGS=()
-          [[ "${NO_CHECK}" == "true" ]] && ARGS+=(--no-check)
-          [[ "${FIX_TABS}" == "true" ]] && ARGS+=(--fix)
-          [[ "${FORCE}"   == "true" ]] && ARGS+=(--force)
-          [[ -n "${BRANCH}" ]] && ARGS+=(--branch "${BRANCH}")
-          ARGS+=(--commit "${COMMIT_MSG}")
+      - name: Abort if conflict markers were produced
+        run: |
+          if git grep -n -E '^[<=>]{7}($| .*)' -- ':!node_modules' ; then
+            echo "Conflict markers found. Fix them before committing."
+            exit 1
+          else
+            echo "No conflict markers detected."
+          fi
 
-          node scripts/agent.mjs "${ARGS[@]}"
+      - name: Commit changes (if any)
+        run: |
+          set -euo pipefail
+          git config user.name "contentgen-bot"
+          git config user.email "actions@users.noreply.github.com"
 
-      - name: Upload agent report
-        uses: actions/upload-artifact@v4
-        with:
-          name: agent-report
-          path: agent_reports/latest.json
-          if-no-files-found: ignore
+          git add -A
+          if git diff --cached --quiet ; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git commit -m "content: auto-generate posts"
+
+      - name: Push with rebase (handles non-fast-forward)
+        run: |
+          set -euo pipefail
+          for i in 1 2 3; do
+            if git push -u origin "$BRANCH" ; then
+              echo "Push success."
+              exit 0
+            fi
+            echo "Push rejected (non-fast-forward). Rebasing onto remote and retrying..."
+            git pull --rebase --autostash origin "$BRANCH" || true
+          done
+          echo "Push failed after 3 attempts."
+          exit 1
