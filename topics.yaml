@@ -1,18 +1,4 @@
-# Add or modify as many topics as you like. First N are generated when using --max N.
-- title: What is Jamstack in 2025?
-  description: A clear, current explanation of Jamstack, why it changed, and who benefits now.
-  audience: frontend developers exploring modern site architectures
-  tags: [web, jamstack, static-sites]
-  type: blog post
-
-- title: A pragmatic intro to Vercel + Next.js App Router
-  description: How App Router works, when to choose server components, and deployment tips.
-  audience: React devs migrating from pages router
-  tags: [react, nextjs, vercel]
-  type: blog post
-
-- title: Content pipelines with GitHub Actions
-  description: Show how to automate linting, link checks, and publishing for content repos.
-  audience: engineering teams building docs/blogs
-  tags: [github-actions, docs, devops]
-  type: tutorial
+topics:
+  - Why content agents accelerate projects
+  - Bootstrapping a content engine on GitHub Actions
+  - Automating rebase-and-push with a CI bot
