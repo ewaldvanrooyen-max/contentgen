@@ -40,9 +40,16 @@ jobs:
 
       - name: Generate content
         run: |
+          set -euo pipefail
           MAX="${{ github.event.inputs.max }}"
-          if [ -z "$MAX" ]; then MAX=2; fi
-          node scripts/contentgen.mjs --max "$MAX"
+          if [ -z "${MAX:-}" ]; then MAX=2; fi
+
+          ROOT="$GITHUB_WORKSPACE"
+          node scripts/contentgen.mjs \
+            --max "$MAX" \
+            --out "$ROOT/content" \
+            --config "$ROOT/contentgen/config.yaml" \
+            --topics "$ROOT/contentgen/topics.yaml"
 
       - name: Commit & push (via agent, handles rebase)
         run: |
