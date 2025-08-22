@@ -6,13 +6,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Fail if git conflict markers exist
-        shell: bash
         run: |
-          if git grep -n '^[<=>]\{7\}' -- . ; then
+          set -e
+          # Search only tracked files for conflict markers.
+          if git grep -nE '^(<<<<<<<|=======|>>>>>>>)' -- . ; then
             echo "Conflict markers found. Fix them before merging."
             exit 1
           else
-            echo "No conflict markers found."
+            echo "No conflict markers in tracked files."
           fi
