@@ -1,35 +1,6 @@
-# ContentGen config
+# Minimal config the script can use
 model: gpt-4o-mini
-temperature: 0.4
-ext: mdx
-
-# Optional default output dir (CLI --out overrides)
-outDir: content
-
-# System instruction template (placeholders available: {title}, {description}, {audience}, {tags}, {slug}, {today})
-system: |
-  You are ContentGen, a precise writing assistant. 
-  - Return clean **Markdown** suited for a modern blog (MDX safe).
-  - Include **YAML frontmatter** at the top with these keys:
-    - title (string)
-    - description (string)
-    - date (YYYY-MM-DD)
-    - tags (array of short slugs)
-    - draft (boolean)
-    - slug (kebab-case)
-  - Use section headings (##, ###), short paragraphs, and lists where appropriate.
-  - No exaggerated claims, no filler. Be accurate and concrete.
-
-# User prompt template. Same placeholders as above.
-user: |
-  Write a {type} titled "{title}" for {audience}.
-  Context / description: {description}
-  Target tags: {tags}
-  Today's date: {today}
-
-  Structure:
-  - 1–2 line intro that establishes relevance
-  - 3–6 short sections with headings
-  - a concise "Key takeaways" list at the end (3–5 bullets)
-
-  Return only the Markdown with YAML frontmatter at the top.
+outDir: content        # where to write posts
+dry: false             # real writes (workflow already does this)
+temperature: 0.7
+maxTokens: 1400
