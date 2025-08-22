@@ -1,24 +1,33 @@
-# node / build
+# Node / Next
 node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.cache/
 dist/
+build/
 .next/
 out/
-coverage/
-*.log
-npm-debug.log*
-yarn-error.log*
+.vercel/
 
-# local env & tooling
+# Env / local
 .env
 .env.*
-.vercel/
-.vscode/
+*.local
+
+# Tests / coverage
+coverage/
+.vitest/
+jest-html-reporters-*.html
+
+# Editor / OS
 .DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+*.log
 
-# agent + generator artifacts
-agent_reports/
-AGENT_TEST.txt
-
-# merge leftovers
+# Merge leftovers
 *.orig
-.env.local
