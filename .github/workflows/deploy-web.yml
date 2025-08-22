@@ -1,0 +1,55 @@
+name: deploy-web
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - "site/**"
+      - "content/**"
+      - ".github/workflows/deploy-web.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: site/package.json
+
+      - name: Install
+        working-directory: site
+        run: npm ci || npm i
+
+      - name: Build
+        working-directory: site
+        run: npm run build
+
+      # Deploy to Vercel if secrets are present. Otherwise skip cleanly.
+      - name: Deploy to Vercel (Production)
+        if: ${{ env.VERCEL_TOKEN && env.VERCEL_ORG_ID && env.VERCEL_PROJECT_ID }}
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          npm i -g vercel@latest
+          cd site
+          vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+          URL=$(vercel deploy --prod --token="$VERCEL_TOKEN")
+          echo "DEPLOY_URL=$URL" >> $GITHUB_ENV
+
+      - name: Show Deployment URL
+        if: ${{ env.DEPLOY_URL }}
+        run: echo "Deployed: $DEPLOY_URL"
