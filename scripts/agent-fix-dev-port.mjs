@@ -8,7 +8,7 @@ const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
 pkg.scripts ??= {};
 
 let dev = pkg.scripts.dev || 'next dev';
-dev = dev.replace(/\s+(?:-p|--port)\s+\d+/g,'').trim();
+dev = dev.replace(/\s+(?:-p|--port)\s+\d+/g, '').trim();   // remove any existing port flags
 pkg.scripts.dev = `${dev} -p ${PORT}`;
 
 writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
