@@ -31,3 +31,4 @@ jest-html-reporters-*.html
 
 # Merge leftovers
 *.orig
+/web/.env.local
