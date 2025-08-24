@@ -1,6 +1,0 @@
-# Minimal config the script can use
-model: gpt-4o-mini
-outDir: content        # where to write posts
-dry: false             # real writes (workflow already does this)
-temperature: 0.7
-maxTokens: 1400
