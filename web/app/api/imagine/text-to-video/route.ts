@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { vyroTextToVideo } from "@/lib/imagine/vyro"";
+import { vyroTextToVideo } from "@/lib/imagine/vyro";
 
 export const maxDuration = 300;
 
