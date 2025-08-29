@@ -5,6 +5,8 @@ export type Post = {
   slug: string;
   title: string;
   contentHtml: string;
+    date?: string;
+  description?: string;
 };
 
 function mdToHtml(md: string): string {
