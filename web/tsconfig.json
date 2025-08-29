@@ -10,7 +10,7 @@
     "skipLibCheck": true,
     "strict": true,
     "noEmit": true,
-    "module": "esnext",
+  "    "module": "NodeNext",
     "moduleResolution": "nodenext",
     "resolveJsonModule": true,
     "isolatedModules": true,
