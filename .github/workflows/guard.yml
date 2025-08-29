@@ -19,9 +19,10 @@ jobs:
 
       - name: Scan for conflict markers
         run: |
-          set -e
-          if git grep -n '<<<<<<<\|>>>>>>>\|=======' -- . ':!package-lock.json' ; then
-            echo "::error::Conflict markers found in the files above."
+          set -euo pipefail
+          echo "Scanning for conflict markers at line start (excluding workflow files)..."
+          if git grep -nE '^(<{7}|={7}|>{7})' -- ':!/.github/workflows/*.yml' HEAD; then
+            echo "Conflict markers detected. Please resolve them before merging."
             exit 1
           fi
           echo "No conflict markers found."
