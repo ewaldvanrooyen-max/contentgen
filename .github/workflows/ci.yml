@@ -3,38 +3,31 @@ on:
   push:
     branches: ["**"]
   pull_request:
-  workflow_dispatch: {}
 jobs:
-  build_root:
-    if: ${{ hashFiles('package.json') != '' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: package-lock.json
-      - run: npm ci
-      - run: npm run lint --if-present
-      - run: npm run typecheck --if-present
-      - run: npm test --if-present
-      - run: npm run build --if-present
-  build_site:
-    if: ${{ hashFiles('site/package.json') != '' }}
+  build:
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: site
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Use Node.js 20
+        uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
           cache-dependency-path: site/package-lock.json
-      - run: npm ci
-      - run: npm run lint --if-present
-      - run: npm run typecheck --if-present
-      - run: npm test --if-present
-      - run: npm run build --if-present
+      - name: Install
+        run: npm ci
+      - name: Lint
+        run: npm run lint --if-present
+      - name: Typecheck
+        run: npm run typecheck --if-present
+      - name: Test
+        run: npm test --if-present
+      - name: Build
+        run: npm run build --if-present
+
