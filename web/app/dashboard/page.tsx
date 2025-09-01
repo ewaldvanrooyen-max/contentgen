@@ -28,11 +28,39 @@ export default function DashboardPage() {
     setContent(data.content || "No content returned");
   }
 
+  async function handleExportCSV() {
+    const res = await fetch("/api/export/csv");
+    const blob = await res.blob();
+    const url = window.URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "metrics.csv";
+    a.click();
+
+    window.URL.revokeObjectURL(url);
+  }
+
   return (
     <div style={{ padding: "2rem", fontFamily: "sans-serif" }}>
       <h1 style={{ fontSize: "1.5rem", marginBottom: "1rem" }}>
         ContentGen Dashboard
       </h1>
+
+      <button
+        onClick={handleExportCSV}
+        style={{
+          background: "green",
+          color: "white",
+          border: "none",
+          padding: "0.5rem 1rem",
+          borderRadius: "6px",
+          cursor: "pointer",
+          marginBottom: "1rem",
+        }}
+      >
+        ⬇ Export Metrics CSV
+      </button>
 
       <h2>Trending Topics</h2>
       <ul>
