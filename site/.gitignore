@@ -1,0 +1,5 @@
+# Example environment variables for Contentgen
+OPENAI_API_KEY=your-openai-api-key-here
+VERCEL_ANALYTICS_ID=your-vercel-analytics-id-here
+NEXT_PUBLIC_API_URL=http://localhost:3000
+
