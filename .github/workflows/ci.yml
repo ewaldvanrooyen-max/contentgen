@@ -3,7 +3,7 @@ on:
   push:
     branches: ["**"]
   pull_request:
-  workflow_dispatch: {}   # allow manual run
+  workflow_dispatch: {}
 jobs:
   build:
     runs-on: ubuntu-latest
