@@ -1,6 +1,7 @@
-/** @type {import('next').NextConfig} */
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
 const nextConfig = {
-  experimental: { typedRoutes: true },
-  reactStrictMode: true
+    experimental: { typedRoutes: true }
 };
-module.exports = nextConfig;
+exports.default = nextConfig;
+//# sourceMappingURL=next.config.js.map
