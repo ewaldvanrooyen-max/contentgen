@@ -17,5 +17,5 @@ export default async function PostPage({ params }: { params: { slug: string[] } 
 // Pre-generate all dynamic routes at build time
 export async function generateStaticParams() {
   const posts = await getAllPosts();
-  return posts.map((p) => ({ slug: p.slug }));
+  return posts.map((p: { slug: string }) => ({ slug: p.slug }));
 }

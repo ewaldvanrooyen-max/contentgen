@@ -1,12 +1,15 @@
-export const dynamic = "force-dynamic";
+"use client";
 
 import { useSession, signOut } from "next-auth/react";
+
 export default function Page() {
   const session = useSession();
   const user = session?.data?.user;
+
   if (!user) {
     return <p>Please sign in</p>;
   }
+
   return (
     <div>
       <p>Welcome, {user.name}!</p>
